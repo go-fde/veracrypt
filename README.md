@@ -36,7 +36,7 @@ A KDF costs about half a second (500,000 PBKDF2 iterations, or Argon2id at
 
 | | |
 |---|---|
-| Ciphers (XTS) | AES, Twofish, AES-Twofish (cryptsetup `twofish-aes`) |
+| Ciphers (XTS) | AES, Serpent, Twofish; the cascades AES-Twofish, AES-Twofish-Serpent, Serpent-AES, Serpent-Twofish-AES, Twofish-Serpent (cryptsetup names them in reverse: `twofish-aes`, `serpent-twofish-aes`, …) |
 | KDFs | PBKDF2 with SHA-512, SHA-256, BLAKE2s-256 or RIPEMD-160; Argon2id; TrueCrypt's PBKDF2-SHA-1 with `Legacy` |
 | Options | PIM, keyfiles (up to 1 MiB each), passwords up to 128 bytes |
 | Volumes | normal, hidden, backup headers; VeraCrypt and TrueCrypt 5.0 and later |
@@ -44,9 +44,8 @@ A KDF costs about half a second (500,000 PBKDF2 iterations, or Argon2id at
 The following are **not supported yet**. A volume that uses them fails like
 a wrong password, because nothing on disk can tell the two apart.
 
-- Serpent, Camellia and Kuznyechik, and the cascades that use them. These
-  need block-cipher implementations the fleet does not have yet
-  (go-fde/fde#28).
+- Camellia and Kuznyechik, and the cascades that use them. These need
+  block-cipher implementations the fleet does not have yet (go-fde/fde#28).
 - The Whirlpool and Streebog KDFs.
 - TrueCrypt's LRW and CBC modes, and headers older than version 3.
 
@@ -64,17 +63,18 @@ which VeraCrypt and TrueCrypt made, with the passwords, PIMs and keyfiles
 of `tests/tcrypt-compat-test`. The FAT filesystem inside must have the
 UUID that test checks: `DEAD-BABE`, or `CAFE-BABE` in a hidden volume.
 
-- 35 volumes open and match, covering:
+- 55 volumes open and match, covering:
   - VeraCrypt and TrueCrypt;
   - SHA-512, SHA-256, BLAKE2s, RIPEMD-160 and Argon2id;
   - PIM, keyfiles, and a 72-byte password;
   - hidden volumes, including TrueCrypt 5's;
-  - the AES-Twofish cascade.
-- The 55 volumes using primitives not supported yet must be refused rather
+  - AES, Serpent and Twofish alone, and all five cascades of them.
+- The 35 volumes using primitives not supported yet must be refused rather
   than misread.
 
-Reversing the cascade's decryption order fails the three cascade volumes,
-so the order is checked.
+Reversing the cascade's decryption order fails all 20 cascade volumes, so
+the order is checked. Serpent's byte order (there are two in circulation)
+is confirmed by the same images.
 
 The archive is GPL-2.0+, so it is fetched at test time and never
 committed. Pinned by commit and SHA-256, it is read through
@@ -110,7 +110,13 @@ Once decrypted, the header is checked before use:
   [go-encryptions/xts](https://github.com/go-encryptions/xts) v0.2.0
   `DecryptSectors`, which is ahead of OpenSSL on one core.
 - Twofish goes through `golang.org/x/crypto/twofish` one block at a time.
-  It has not been measured against a reference implementation yet.
+  It has not been measured against a reference implementation yet
+  (veracrypt#3).
+- Serpent goes through
+  [go-encryptions/serpent](https://github.com/go-encryptions/serpent)
+  v0.1.0, bitsliced pure Go, one block at a time. It is 2.1× (encryption)
+  and 2.5× (decryption) slower than Botan on one core, a gap tracked in
+  go-encryptions/serpent#2.
 - The KDFs cost what the format specifies; that cost is the point of the
   format.
 

@@ -4,6 +4,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 
+	"github.com/go-encryptions/serpent"
 	"github.com/go-encryptions/xts"
 	"golang.org/x/crypto/twofish"
 )
@@ -13,13 +14,18 @@ import (
 // display name (VeraCrypt's "AES-Twofish" is "twofish-aes" here).
 type Cipher string
 
-// The ciphers this version decrypts. Serpent, Camellia and Kuznyechik, and
-// the cascades that use them, need implementations the fleet does not have
-// yet (go-fde/fde#28); a volume made with them fails like a wrong password.
+// The ciphers this version decrypts. Camellia and Kuznyechik, and the
+// cascades that use them, need implementations the fleet does not have yet
+// (go-fde/fde#28); a volume made with them fails like a wrong password.
 const (
-	AES        Cipher = "aes"
-	Twofish    Cipher = "twofish"
-	TwofishAES Cipher = "twofish-aes"
+	AES               Cipher = "aes"
+	Serpent           Cipher = "serpent"
+	Twofish           Cipher = "twofish"
+	TwofishAES        Cipher = "twofish-aes"
+	SerpentTwofishAES Cipher = "serpent-twofish-aes"
+	AESSerpent        Cipher = "aes-serpent"
+	AESTwofishSerpent Cipher = "aes-twofish-serpent"
+	SerpentTwofish    Cipher = "serpent-twofish"
 )
 
 type blockFunc func(key []byte) (cipher.Block, error)
@@ -43,8 +49,13 @@ type chain struct {
 // can build, in its order.
 var chains = []chain{
 	{AES, []chainLink{{aes.NewCipher, 0, 32}}},
+	{Serpent, []chainLink{{serpent.NewCipher, 0, 32}}},
 	{Twofish, []chainLink{{twofishBlock, 0, 32}}},
 	{TwofishAES, []chainLink{{twofishBlock, 0, 64}, {aes.NewCipher, 32, 96}}},
+	{SerpentTwofishAES, []chainLink{{serpent.NewCipher, 0, 96}, {twofishBlock, 32, 128}, {aes.NewCipher, 64, 160}}},
+	{AESSerpent, []chainLink{{aes.NewCipher, 0, 64}, {serpent.NewCipher, 32, 96}}},
+	{AESTwofishSerpent, []chainLink{{aes.NewCipher, 0, 96}, {twofishBlock, 32, 128}, {serpent.NewCipher, 64, 160}}},
+	{SerpentTwofish, []chainLink{{serpent.NewCipher, 0, 64}, {twofishBlock, 32, 96}}},
 }
 
 // xtsChain is a chain keyed: one XTS cipher per link.
