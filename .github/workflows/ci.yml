@@ -1,0 +1,119 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # cryptsetup's VeraCrypt/TrueCrypt images (tests/tcrypt-images.tar.xz).
+  # GPL-2.0+, so they are fetched, never committed; pinned by commit and
+  # checked by SHA-256.
+  TCRYPT_URL: https://raw.githubusercontent.com/mbroz/cryptsetup/ee1c86745a7333a8e97c85b63541b92af9a2e331/tests/tcrypt-images.tar.xz
+  TCRYPT_SHA256: cf65f0b336a623c2d5510e6ad63d364a9ade1dd46ac8407e63a0e95b17823272
+
+jobs:
+  # The corpus opens ~35 volumes, each with VeraCrypt's real KDF costs
+  # (500,000 PBKDF2 iterations, Argon2id at 416 MiB): about a minute plain,
+  # past ten under -race. So the corpus and the 100% coverage gate run
+  # without -race, and -race runs on the unit tests.
+  corpus:
+    name: corpus + coverage (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runs-on: ubuntu-latest
+          - arch: arm64
+            runs-on: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.3'
+          cache: true
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then echo "$out"; exit 1; fi
+      - name: Vet
+        run: go vet ./...
+      - name: Fetch the VeraCrypt/TrueCrypt-made images
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/tcrypt-images.tar.xz" "$TCRYPT_URL"
+          echo "$TCRYPT_SHA256  $RUNNER_TEMP/tcrypt-images.tar.xz" | sha256sum -c -
+          echo "TCRYPT_IMAGES=$RUNNER_TEMP/tcrypt-images.tar.xz" >> "$GITHUB_ENV"
+      - name: Test (interoperability, coverage)
+        run: go test -timeout 30m -coverprofile=cover.out ./...
+      - name: Coverage is 100%
+        run: |
+          total=$(go tool cover -func=cover.out | tail -1 | awk '{print $3}')
+          echo "coverage: $total"
+          [ "$total" = "100.0%" ]
+
+  race:
+    name: race (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runs-on: ubuntu-latest
+          - arch: arm64
+            runs-on: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.3'
+          cache: true
+      - run: go test -race -timeout 20m ./...
+
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.3'
+          cache: true
+      - run: go test -run '^$' -fuzz '^FuzzParse$' -fuzztime 60s -fuzzminimizetime 5s .
+
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.3'
+          cache: true
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  # Big-endian: every header field is big-endian on disk, the opposite of
+  # amd64/arm64, so s390x checks the decoding is explicit. Unit tests only.
+  s390x:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.3'
+          cache: true
+      - name: Set up QEMU
+        run: docker run --privileged --rm tonistiigi/binfmt --install s390x
+      - name: Test under QEMU
+        env:
+          GOOS: linux
+          GOARCH: s390x
+          CGO_ENABLED: '0'
+        run: |
+          go test -c -o veracrypt.test .
+          docker run --rm --platform linux/s390x -v "$PWD:/work" -w /work debian:trixie ./veracrypt.test -test.v -test.timeout 30m

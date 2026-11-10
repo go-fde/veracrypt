@@ -1,0 +1,216 @@
+package veracrypt
+
+import (
+	"archive/tar"
+	"bytes"
+	"encoding/hex"
+	"errors"
+	"io"
+	"os"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/go-compressions/xz"
+)
+
+// The interoperability corpus is cryptsetup's tests/tcrypt-images.tar.xz:
+// VeraCrypt and TrueCrypt volumes holding a FAT filesystem whose UUID is
+// DEAD-BABE (CAFE-BABE in hidden volumes), checked by
+// tests/tcrypt-compat-test. It is GPL-2.0+, so it is fetched, never
+// committed: the test reads the archive named by TCRYPT_IMAGES and skips,
+// loudly, without it.
+const corpusEnv = "TCRYPT_IMAGES"
+
+// Passwords from tcrypt-compat-test.
+const (
+	password       = "aaaaaaaaaaaa"
+	passwordHidden = "bbbbbbbbbbbb"
+	password72     = "aaaaaaaaaaaabbbbbbbbbbbbccccccccccccddddddddddddeeeeeeeeeeeeffffffffffff"
+	passwordPIM    = "cccccccccccccccccccc"
+)
+
+func loadCorpus(t *testing.T) map[string][]byte {
+	t.Helper()
+	path := os.Getenv(corpusEnv)
+	if path == "" {
+		t.Skipf("%s is not set: the VeraCrypt/TrueCrypt-made images are not available, interoperability is NOT tested", corpusEnv)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	xr, err := xz.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := tar.NewReader(xr)
+	files := map[string][]byte{}
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			return files
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeGNUSparse {
+			continue
+		}
+		// System-encryption images (whole disks, up to 66 MiB) are not
+		// supported by this version: not even read.
+		if strings.Contains(h.Name, "/sys_") {
+			continue
+		}
+		if h.Size > 64<<20 {
+			t.Fatalf("%s declares %d bytes", h.Name, h.Size)
+		}
+		b, err := io.ReadAll(io.LimitReader(tr, 64<<20))
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[h.Name[strings.LastIndex(h.Name, "/")+1:]] = b
+	}
+}
+
+// image is what a corpus file name says (tcrypt-compat-test get_PARAMS):
+// prefix-hash-mode-ciphers[-hidden], ciphers in VeraCrypt's display order.
+type image struct {
+	name, prefix, hash, mode string
+	ciphers                  []string
+	hidden                   bool
+}
+
+func parseName(n string) image {
+	parts := strings.Split(n, "-")
+	im := image{name: n, prefix: parts[0], hash: parts[1], mode: parts[2], ciphers: parts[3:]}
+	if last := im.ciphers[len(im.ciphers)-1]; last == "hidden" {
+		im.hidden = true
+		im.ciphers = im.ciphers[:len(im.ciphers)-1]
+	}
+	return im
+}
+
+// kdfOf maps the corpus hash names to this package's KDFs; false for one
+// this version does not implement.
+func kdfOf(h string) (KDF, bool) {
+	switch h {
+	case "sha512":
+		return SHA512, true
+	case "sha256":
+		return SHA256, true
+	case "blake2s":
+		return BLAKE2s, true
+	case "ripemd160":
+		return RIPEMD160, true
+	case "argon2id":
+		return Argon2id, true
+	}
+	return "", false
+}
+
+// cipherOf turns VeraCrypt's display order into this package's (reversed,
+// cryptsetup's) name; false for a chain this version does not build.
+func cipherOf(display []string) (Cipher, bool) {
+	rev := make([]string, len(display))
+	for i, c := range display {
+		rev[len(display)-1-i] = c
+	}
+	name := Cipher(strings.Join(rev, "-"))
+	for _, c := range chains {
+		if c.name == name {
+			return name, true
+		}
+	}
+	return "", false
+}
+
+func (im image) options(files map[string][]byte) Options {
+	o := Options{Password: []byte(password)}
+	switch {
+	case strings.HasPrefix(im.prefix, "vcpim_1_"):
+		o.Password = []byte(passwordPIM)
+		o.PIM, _ = strconv.Atoi(strings.TrimPrefix(im.prefix, "vcpim_1_"))
+	case strings.HasPrefix(im.prefix, "vck_") || strings.HasPrefix(im.prefix, "tck_"):
+		o.Keyfiles = [][]byte{files["keyfile1"], files["keyfile2"]}
+		switch {
+		case strings.HasPrefix(im.prefix, "vck_1_nopw"):
+			o.Password = nil
+		case strings.HasPrefix(im.prefix, "vck_1_pw72"):
+			o.Password = []byte(password72)
+		}
+	}
+	if strings.HasPrefix(im.prefix, "tc") {
+		o.TrueCryptOnly = true
+	}
+	return o
+}
+
+func TestCorpus(t *testing.T) {
+	files := loadCorpus(t)
+	opened, refused := 0, 0
+	for name, img := range files {
+		if !strings.HasPrefix(name, "tc") && !strings.HasPrefix(name, "vc") {
+			continue
+		}
+		im := parseName(name)
+		t.Run(name, func(t *testing.T) {
+			kdf, kdfOK := kdfOf(im.hash)
+			cipher, cipherOK := cipherOf(im.ciphers)
+			o := im.options(files)
+			o.KDF, o.Cipher = kdf, cipher
+			dev := memDev{bytes.NewReader(img)}
+			if !kdfOK || !cipherOK || im.mode != "xts" {
+				o.KDF, o.Cipher = "", ""
+				if kdfOK {
+					o.KDF = kdf // keep the trial short where we can
+				}
+				_, err := OpenFrom(dev, int64(len(img)), o)
+				if !errors.Is(err, ErrWrongSecret) && !errors.Is(err, ErrUnsupported) {
+					t.Fatalf("unsupported %s-%s-%v opened or failed oddly: %v", im.hash, im.mode, im.ciphers, err)
+				}
+				refused++
+				return
+			}
+			checkUUID(t, dev, int64(len(img)), o, "DEAD-BABE")
+			if im.hidden {
+				o.Hidden, o.Password = true, []byte(passwordHidden)
+				checkUUID(t, dev, int64(len(img)), o, "CAFE-BABE")
+			}
+			opened++
+		})
+	}
+	t.Logf("%d opened, %d refused as not supported yet", opened, refused)
+	if opened == 0 {
+		t.Fatal("no image opened")
+	}
+}
+
+func checkUUID(t *testing.T, dev memDev, size int64, o Options, want string) {
+	t.Helper()
+	d, err := OpenFrom(dev, size, o)
+	if err != nil {
+		t.Fatalf("open (hidden=%v): %v", o.Hidden, err)
+	}
+	boot := make([]byte, 512)
+	if _, err := d.ReadAt(boot, 0); err != nil {
+		t.Fatal(err)
+	}
+	if got := fatUUID(boot); got != want {
+		t.Fatalf("UUID %s, want %s (hidden=%v, %s %s)", got, want, o.Hidden, d.Header().KDF, d.Header().Cipher)
+	}
+}
+
+// fatUUID is blkid's FAT volume ID: offset 67 for FAT32, 39 for FAT12/16.
+func fatUUID(b []byte) string {
+	off := 39
+	if string(b[82:90]) == "FAT32   " {
+		off = 67
+	}
+	id := strings.ToUpper(hex.EncodeToString([]byte{b[off+3], b[off+2], b[off+1], b[off]}))
+	return id[:4] + "-" + id[4:]
+}
+
+type memDev struct{ *bytes.Reader }
+
+func (memDev) Close() error { return nil }
