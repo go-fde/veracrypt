@@ -1,2 +1,128 @@
 # veracrypt
-VeraCrypt and TrueCrypt volumes in pure Go: read-only unlock by password, keyfiles and PIM; AES and Twofish XTS
+
+Read VeraCrypt and TrueCrypt volumes in pure Go.
+
+```go
+dev, err := veracrypt.Open("volume.hc", veracrypt.Options{
+	Password: []byte("password"),
+	// Keyfiles: [][]byte{kf1, kf2}, PIM: 485, Hidden: true, …
+})
+if err != nil {
+	log.Fatal(err)
+}
+defer dev.Close()
+boot := make([]byte, 512)
+_, err = dev.ReadAt(boot, 0) // the filesystem's first sector
+```
+
+`OpenFrom(r, size, opts)` reads from any `io.ReaderAt`, such as a partition
+or a virtual disk.
+
+## How a volume opens
+
+A VeraCrypt header looks like random bytes: nothing on disk names the key
+derivation or the cipher. Opening a volume therefore works by trial, as in
+cryptsetup's tcrypt support:
+
+1. Every allowed KDF derives a key from the password and keyfiles.
+2. Every allowed cipher chain decrypts the header with that key.
+3. The trial stops when the header starts with `VERA` (`TRUE` for
+   TrueCrypt) and its two CRC-32 checks match.
+
+A KDF costs about half a second (500,000 PBKDF2 iterations, or Argon2id at
+416 MiB). Naming the KDF and the cipher in `Options` skips the others.
+
+## What it reads
+
+| | |
+|---|---|
+| Ciphers (XTS) | AES, Twofish, AES-Twofish (cryptsetup `twofish-aes`) |
+| KDFs | PBKDF2 with SHA-512, SHA-256, BLAKE2s-256 or RIPEMD-160; Argon2id; TrueCrypt's PBKDF2-SHA-1 with `Legacy` |
+| Options | PIM, keyfiles (up to 1 MiB each), passwords up to 128 bytes |
+| Volumes | normal, hidden, backup headers; VeraCrypt and TrueCrypt 5.0 and later |
+
+The following are **not supported yet**. A volume that uses them fails like
+a wrong password, because nothing on disk can tell the two apart.
+
+- Serpent, Camellia and Kuznyechik, and the cascades that use them. These
+  need block-cipher implementations the fleet does not have yet
+  (go-fde/fde#28).
+- The Whirlpool and Streebog KDFs.
+- TrueCrypt's LRW and CBC modes, and headers older than version 3.
+
+These are refused with `ErrUnsupported`:
+
+- system encryption;
+- sector sizes other than 512 bytes.
+
+Writing is not implemented: `WriteAt` returns `ErrReadOnly`.
+
+## How it is checked
+
+The tests open the images in cryptsetup's `tests/tcrypt-images.tar.xz`,
+which VeraCrypt and TrueCrypt made, with the passwords, PIMs and keyfiles
+of `tests/tcrypt-compat-test`. The FAT filesystem inside must have the
+UUID that test checks: `DEAD-BABE`, or `CAFE-BABE` in a hidden volume.
+
+- 35 volumes open and match, covering:
+  - VeraCrypt and TrueCrypt;
+  - SHA-512, SHA-256, BLAKE2s, RIPEMD-160 and Argon2id;
+  - PIM, keyfiles, and a 72-byte password;
+  - hidden volumes, including TrueCrypt 5's;
+  - the AES-Twofish cascade.
+- The 55 volumes using primitives not supported yet must be refused rather
+  than misread.
+
+Reversing the cascade's decryption order fails the three cascade volumes,
+so the order is checked.
+
+The archive is GPL-2.0+, so it is fetched at test time and never
+committed. Pinned by commit and SHA-256, it is read through
+`TCRYPT_IMAGES`:
+
+```sh
+TCRYPT_IMAGES=/path/to/tcrypt-images.tar.xz go test ./...
+```
+
+Without it the interoperability test skips, and says so. A test-only writer
+builds volumes for the unit tests, which reach every refusal and every
+limit. CI requires 100 % coverage.
+
+## Untrusted images
+
+Trial decryption is a cost an attacker controls: a large PIM multiplies
+PBKDF2's iterations and Argon2id's memory. `Limits` bounds the number of
+derivations, the PIM (2000 by default), the PBKDF2 iterations and the
+Argon2id memory (1 GiB by default). An open is refused with `ErrLimit`
+before any derivation that would exceed them.
+
+Once decrypted, the header is checked before use:
+
+- both CRC-32s;
+- the data area lies inside the device;
+- every offset is aligned to the sector size.
+
+`FuzzParse` fuzzes those checks.
+
+## Performance
+
+- AES volumes decrypt through
+  [go-encryptions/xts](https://github.com/go-encryptions/xts) v0.2.0
+  `DecryptSectors`, which is ahead of OpenSSL on one core.
+- Twofish goes through `golang.org/x/crypto/twofish` one block at a time.
+  It has not been measured against a reference implementation yet.
+- The KDFs cost what the format specifies; that cost is the point of the
+  format.
+
+## References
+
+- cryptsetup `lib/tcrypt/tcrypt.c`: the KDF and cipher tables, the key
+  offsets, the header layout and the data offsets.
+- The VeraCrypt documentation (veracrypt.io): *Volume Format
+  Specification*, *Header Key Derivation*, *PIM*, *Encryption Algorithms*,
+  *Cascades*.
+
+## Licence
+
+BSD-3-Clause. The test corpus is cryptsetup's (GPL-2.0+) and is not part of
+this repository.
