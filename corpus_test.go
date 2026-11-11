@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -109,20 +110,29 @@ func kdfOf(h string) (KDF, bool) {
 	return "", false
 }
 
-// cipherOf turns VeraCrypt's display order into this package's (reversed,
-// cryptsetup's) name; false for a chain this version does not build.
-func cipherOf(display []string) (Cipher, bool) {
-	rev := make([]string, len(display))
-	for i, c := range display {
-		rev[len(display)-1-i] = c
+// ciphersOf lists the chains a corpus file name's cipher list can mean;
+// empty for one this version does not build. The file names do not follow
+// one order: most list VeraCrypt's display order (the reverse of
+// cryptsetup's), but the Kuznyechik cascades list cryptsetup's own
+// (vc_1-sha512-xts-kuznyechik-camellia is cryptsetup's
+// "kuznyechik-camellia"). tcrypt-compat-test only passes the first field
+// to -c as a hint, so it never relied on the order. Both orders can name a
+// chain (serpent-twofish-aes and aes-twofish-serpent are each other's
+// reverse), so the test tries each and lets the FAT UUID decide.
+func ciphersOf(listed []string) []Cipher {
+	rev := make([]string, len(listed))
+	for i, c := range listed {
+		rev[len(listed)-1-i] = c
 	}
-	name := Cipher(strings.Join(rev, "-"))
-	for _, c := range chains {
-		if c.name == name {
-			return name, true
+	var out []Cipher
+	for _, name := range []Cipher{Cipher(strings.Join(rev, "-")), Cipher(strings.Join(listed, "-"))} {
+		for _, c := range chains {
+			if c.name == name && !slices.Contains(out, name) {
+				out = append(out, name)
+			}
 		}
 	}
-	return "", false
+	return out
 }
 
 func (im image) options(files map[string][]byte) Options {
@@ -156,11 +166,11 @@ func TestCorpus(t *testing.T) {
 		im := parseName(name)
 		t.Run(name, func(t *testing.T) {
 			kdf, kdfOK := kdfOf(im.hash)
-			cipher, cipherOK := cipherOf(im.ciphers)
+			candidates := ciphersOf(im.ciphers)
 			o := im.options(files)
-			o.KDF, o.Cipher = kdf, cipher
+			o.KDF = kdf
 			dev := memDev{bytes.NewReader(img)}
-			if !kdfOK || !cipherOK || im.mode != "xts" {
+			if !kdfOK || len(candidates) == 0 || im.mode != "xts" {
 				o.KDF, o.Cipher = "", ""
 				if kdfOK {
 					o.KDF = kdf // keep the trial short where we can
@@ -171,6 +181,14 @@ func TestCorpus(t *testing.T) {
 				}
 				refused++
 				return
+			}
+			// The first candidate whose header decrypts is the chain; a
+			// wrong one fails the header CRCs like a wrong password.
+			for _, c := range candidates {
+				o.Cipher = c
+				if _, err := OpenFrom(dev, int64(len(img)), o); err == nil {
+					break
+				}
 			}
 			checkUUID(t, dev, int64(len(img)), o, "DEAD-BABE")
 			if im.hidden {

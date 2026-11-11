@@ -2,6 +2,8 @@ github.com/go-compressions/xz v0.3.1 h1:z4U2wNrV71pgUvxkSlBuoZc7JCJ7d+Tb3tSjyMeG
 github.com/go-compressions/xz v0.3.1/go.mod h1:ZbYM2CbKR8SZzq6rqhqlWFnBaXrNhWwQyTSslnYQ0FU=
 github.com/go-encryptions/camellia v0.1.0 h1:r015TiEcYgOhA9dkR2JnWDtj9Gff0lPHaRJsT7GGWF4=
 github.com/go-encryptions/camellia v0.1.0/go.mod h1:QCBj6j5PJfCa0nHF+F1a89V9GOIUGLxd7T4PAFRWdmc=
+github.com/go-encryptions/kuznyechik v0.1.0 h1:19xwI7S6wqInVmI7TsE022NXRX32Krd2/YwhqrzJS0U=
+github.com/go-encryptions/kuznyechik v0.1.0/go.mod h1:NjtF55qcESMhbcr2xL0JAunEAgpln4hIswf9PnwkCgw=
 github.com/go-encryptions/serpent v0.1.0 h1:d13mzIis+yQ/X3j1z1XVMSz15r5hr2ty6Fg/3lhKcSU=
 github.com/go-encryptions/serpent v0.1.0/go.mod h1:kXXpRWtBvpI0BowZqSwqbIeMA0kgwNTL/wxShV7JUHg=
 github.com/go-encryptions/xts v0.2.0 h1:iy/XXrD1V5h4jZp1MX6Rfa/Tx/0XzBGmShacc3Bq810=
