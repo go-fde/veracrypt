@@ -36,7 +36,7 @@ A KDF costs about half a second (500,000 PBKDF2 iterations, or Argon2id at
 
 | | |
 |---|---|
-| Ciphers (XTS) | AES, Serpent, Twofish; the cascades AES-Twofish, AES-Twofish-Serpent, Serpent-AES, Serpent-Twofish-AES, Twofish-Serpent (cryptsetup names them in reverse: `twofish-aes`, `serpent-twofish-aes`, …) |
+| Ciphers (XTS) | AES, Camellia, Serpent, Twofish; the cascades AES-Twofish, AES-Twofish-Serpent, Camellia-Serpent, Serpent-AES, Serpent-Twofish-AES, Twofish-Serpent (cryptsetup names them in reverse: `twofish-aes`, `serpent-camellia`, …) |
 | KDFs | PBKDF2 with SHA-512, SHA-256, BLAKE2s-256 or RIPEMD-160; Argon2id; TrueCrypt's PBKDF2-SHA-1 with `Legacy` |
 | Options | PIM, keyfiles (up to 1 MiB each), passwords up to 128 bytes |
 | Volumes | normal, hidden, backup headers; VeraCrypt and TrueCrypt 5.0 and later |
@@ -44,8 +44,8 @@ A KDF costs about half a second (500,000 PBKDF2 iterations, or Argon2id at
 The following are **not supported yet**. A volume that uses them fails like
 a wrong password, because nothing on disk can tell the two apart.
 
-- Camellia and Kuznyechik, and the cascades that use them. These need
-  block-cipher implementations the fleet does not have yet (go-fde/fde#28).
+- Kuznyechik, and the cascades that use it. It needs a block-cipher
+  implementation the fleet does not have yet (go-fde/fde#28).
 - The Whirlpool and Streebog KDFs.
 - TrueCrypt's LRW and CBC modes, and headers older than version 3.
 
@@ -63,18 +63,23 @@ which VeraCrypt and TrueCrypt made, with the passwords, PIMs and keyfiles
 of `tests/tcrypt-compat-test`. The FAT filesystem inside must have the
 UUID that test checks: `DEAD-BABE`, or `CAFE-BABE` in a hidden volume.
 
-- 55 volumes open and match, covering:
+- 56 volumes open and match, covering:
   - VeraCrypt and TrueCrypt;
   - SHA-512, SHA-256, BLAKE2s, RIPEMD-160 and Argon2id;
   - PIM, keyfiles, and a 72-byte password;
   - hidden volumes, including TrueCrypt 5's;
-  - AES, Serpent and Twofish alone, and all five cascades of them.
-- The 35 volumes using primitives not supported yet must be refused rather
+  - AES, Camellia, Serpent and Twofish alone, and the five cascades of
+    AES, Serpent and Twofish.
+- The 34 volumes using primitives not supported yet must be refused rather
   than misread.
 
 Reversing the cascade's decryption order fails all 20 cascade volumes, so
 the order is checked. Serpent's byte order (there are two in circulation)
 is confirmed by the same images.
+
+The corpus has no Camellia-Serpent volume. That cascade is checked only
+by the test writer's round trip, with cryptsetup's key offsets. Its other
+Camellia volumes also need Kuznyechik or the Streebog KDF.
 
 The archive is GPL-2.0+, so it is fetched at test time and never
 committed. Pinned by commit and SHA-256, it is read through
@@ -117,6 +122,10 @@ Once decrypted, the header is checked before use:
   v0.1.0, bitsliced pure Go, one block at a time. It is 2.1× (encryption)
   and 2.5× (decryption) slower than Botan on one core, a gap tracked in
   go-encryptions/serpent#2.
+- Camellia goes through
+  [go-encryptions/camellia](https://github.com/go-encryptions/camellia)
+  v0.1.0, pure Go, one block at a time. On one core it is level with
+  Botan's scalar build, and 1.12× faster than its default build.
 - The KDFs cost what the format specifies; that cost is the point of the
   format.
 
