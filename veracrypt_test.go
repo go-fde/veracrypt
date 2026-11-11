@@ -34,6 +34,7 @@ func TestRoundTrip(t *testing.T) {
 		{"twofish", func(s *volSpec) { s.cipher = Twofish }, func(*Options) {}},
 		{"aes-twofish cascade", func(s *volSpec) { s.cipher = TwofishAES }, func(*Options) {}},
 		{"serpent", func(s *volSpec) { s.cipher = Serpent }, func(*Options) {}},
+		{"camellia-serpent cascade", func(s *volSpec) { s.cipher = SerpentCamellia }, func(*Options) {}},
 		{"serpent-twofish-aes cascade", func(s *volSpec) { s.cipher = AESTwofishSerpent }, func(*Options) {}},
 		{"veracrypt pim", func(s *volSpec) {
 			s.magic, s.variant, s.pim = "VERA", kdfVariants[4], 1
