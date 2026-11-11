@@ -5,6 +5,7 @@ import (
 	"crypto/cipher"
 
 	"github.com/go-encryptions/camellia"
+	"github.com/go-encryptions/kuznyechik"
 	"github.com/go-encryptions/serpent"
 	"github.com/go-encryptions/xts"
 	"golang.org/x/crypto/twofish"
@@ -15,20 +16,23 @@ import (
 // display name (VeraCrypt's "AES-Twofish" is "twofish-aes" here).
 type Cipher string
 
-// The ciphers this version decrypts. Kuznyechik, and the cascades that use
-// it, need an implementation the fleet does not have yet (go-fde/fde#28); a
-// volume made with them fails like a wrong password.
+// The ciphers this version decrypts: every XTS chain of cryptsetup's table.
 const (
-	AES               Cipher = "aes"
-	Serpent           Cipher = "serpent"
-	Twofish           Cipher = "twofish"
-	TwofishAES        Cipher = "twofish-aes"
-	SerpentTwofishAES Cipher = "serpent-twofish-aes"
-	AESSerpent        Cipher = "aes-serpent"
-	AESTwofishSerpent Cipher = "aes-twofish-serpent"
-	SerpentTwofish    Cipher = "serpent-twofish"
-	Camellia          Cipher = "camellia"
-	SerpentCamellia   Cipher = "serpent-camellia"
+	AES                       Cipher = "aes"
+	Serpent                   Cipher = "serpent"
+	Twofish                   Cipher = "twofish"
+	TwofishAES                Cipher = "twofish-aes"
+	SerpentTwofishAES         Cipher = "serpent-twofish-aes"
+	AESSerpent                Cipher = "aes-serpent"
+	AESTwofishSerpent         Cipher = "aes-twofish-serpent"
+	SerpentTwofish            Cipher = "serpent-twofish"
+	Camellia                  Cipher = "camellia"
+	Kuznyechik                Cipher = "kuznyechik"
+	KuznyechikCamellia        Cipher = "kuznyechik-camellia"
+	TwofishKuznyechik         Cipher = "twofish-kuznyechik"
+	SerpentCamellia           Cipher = "serpent-camellia"
+	AESKuznyechik             Cipher = "aes-kuznyechik"
+	CamelliaSerpentKuznyechik Cipher = "camellia-serpent-kuznyechik"
 )
 
 type blockFunc func(key []byte) (cipher.Block, error)
@@ -60,7 +64,12 @@ var chains = []chain{
 	{AESTwofishSerpent, []chainLink{{aes.NewCipher, 0, 96}, {twofishBlock, 32, 128}, {serpent.NewCipher, 64, 160}}},
 	{SerpentTwofish, []chainLink{{serpent.NewCipher, 0, 64}, {twofishBlock, 32, 96}}},
 	{Camellia, []chainLink{{camellia.NewCipher, 0, 32}}},
+	{Kuznyechik, []chainLink{{kuznyechik.NewCipher, 0, 32}}},
+	{KuznyechikCamellia, []chainLink{{kuznyechik.NewCipher, 0, 64}, {camellia.NewCipher, 32, 96}}},
+	{TwofishKuznyechik, []chainLink{{twofishBlock, 0, 64}, {kuznyechik.NewCipher, 32, 96}}},
 	{SerpentCamellia, []chainLink{{serpent.NewCipher, 0, 64}, {camellia.NewCipher, 32, 96}}},
+	{AESKuznyechik, []chainLink{{aes.NewCipher, 0, 64}, {kuznyechik.NewCipher, 32, 96}}},
+	{CamelliaSerpentKuznyechik, []chainLink{{camellia.NewCipher, 0, 96}, {serpent.NewCipher, 32, 128}, {kuznyechik.NewCipher, 64, 160}}},
 }
 
 // xtsChain is a chain keyed: one XTS cipher per link.
