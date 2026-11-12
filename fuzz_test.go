@@ -12,7 +12,7 @@ import (
 // after decryption, so these checks are the boundary. No input may panic,
 // and a device that opens may only read inside the image.
 func FuzzParse(f *testing.F) {
-	s := defaultVol()
+	s := defaultVol(f)
 	img, _ := buildVolume(f, s)
 	d, err := openImg(&testing.T{}, img, Options{Password: []byte("pw"), TrueCryptOnly: true})
 	if err != nil {

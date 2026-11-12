@@ -141,7 +141,10 @@ Once decrypted, the header is checked before use:
   PBKDF2 iteration. Streebog is 1.8× faster than Botan; Whirlpool is 1.15×
   slower (go-encryptions/whirlpool#1).
 - A wrong password costs the whole trial: every KDF, Whirlpool and Streebog
-  now included. Naming the KDF in `Options` avoids it.
+  included. Opening a Streebog volume without naming its KDF, as
+  `TestCorpusFullTrial` does, took 11 s on one Apple M4 Max core, and 23 s
+  on the same machine under load.
+  Naming the KDF in `Options` avoids it.
 
 ## References
 

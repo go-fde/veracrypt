@@ -208,6 +208,23 @@ func TestCorpus(t *testing.T) {
 	}
 }
 
+// TestCorpusFullTrial opens a real image naming neither the KDF nor the
+// cipher, as a user would. TestCorpus names both to stay fast, so without
+// this the trial order over real images would never run in CI.
+// vc_1-stribog512-xts-camellia is the worst case: Streebog is the last row
+// of the KDF table, so every KDF runs before the one that matches (11 s on
+// one M4 Max core, 23 s under load).
+func TestCorpusFullTrial(t *testing.T) {
+	files := loadCorpus(t)
+	const name = "vc_1-stribog512-xts-camellia"
+	img, ok := files[name]
+	if !ok {
+		t.Fatalf("%s is not in the corpus", name)
+	}
+	o := Options{Password: []byte(password)}
+	checkUUID(t, memDev{bytes.NewReader(img)}, int64(len(img)), o, "DEAD-BABE")
+}
+
 func checkUUID(t *testing.T, dev memDev, size int64, o Options, want string) {
 	t.Helper()
 	d, err := OpenFrom(dev, size, o)

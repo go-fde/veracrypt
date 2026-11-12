@@ -25,6 +25,13 @@ func readAll(t *testing.T, d *Device) []byte {
 }
 
 func TestRoundTrip(t *testing.T) {
+	// Resolved here, on the test's own goroutine: a missing name must fail
+	// TestRoundTrip, not a subtest calling its parent's FailNow.
+	sha512VC := variant(t, "pbkdf2-sha512-500000")
+	whirlpoolTC := variant(t, "pbkdf2-whirlpool-1000")
+	whirlpoolVC := variant(t, "pbkdf2-whirlpool-500000")
+	streebogVC := variant(t, "pbkdf2-stribog512-500000")
+	sha1TC := variant(t, "pbkdf2-sha1-2000")
 	cases := []struct {
 		name string
 		spec func(*volSpec)
@@ -39,25 +46,25 @@ func TestRoundTrip(t *testing.T) {
 		{"kuznyechik-twofish cascade", func(s *volSpec) { s.cipher = TwofishKuznyechik }, func(*Options) {}},
 		{"serpent-twofish-aes cascade", func(s *volSpec) { s.cipher = AESTwofishSerpent }, func(*Options) {}},
 		{"veracrypt pim", func(s *volSpec) {
-			s.magic, s.variant, s.pim = "VERA", variant("pbkdf2-sha512-500000"), 1
+			s.magic, s.variant, s.pim = "VERA", sha512VC, 1
 		}, func(o *Options) { o.PIM, o.KDF = 1, SHA512 }},
-		{"truecrypt whirlpool", func(s *volSpec) { s.variant = variant("pbkdf2-whirlpool-1000") }, func(o *Options) { o.KDF = Whirlpool }},
+		{"truecrypt whirlpool", func(s *volSpec) { s.variant = whirlpoolTC }, func(o *Options) { o.KDF = Whirlpool }},
 		{"veracrypt whirlpool pim", func(s *volSpec) {
-			s.magic, s.variant, s.pim = "VERA", variant("pbkdf2-whirlpool-500000"), 1
+			s.magic, s.variant, s.pim = "VERA", whirlpoolVC, 1
 		}, func(o *Options) { o.PIM, o.KDF = 1, Whirlpool }},
 		{"veracrypt streebog pim", func(s *volSpec) {
-			s.magic, s.variant, s.pim = "VERA", variant("pbkdf2-stribog512-500000"), 1
+			s.magic, s.variant, s.pim = "VERA", streebogVC, 1
 		}, func(o *Options) { o.PIM, o.KDF = 1, Streebog }},
 		{"keyfiles", func(s *volSpec) {
 			s.keyfiles = [][]byte{[]byte("one"), bytes.Repeat([]byte{9}, 300)}
 		}, func(o *Options) { o.Keyfiles = [][]byte{[]byte("one"), bytes.Repeat([]byte{9}, 300)} }},
-		{"legacy sha1", func(s *volSpec) { s.variant = variant("pbkdf2-sha1-2000") }, func(o *Options) { o.Legacy = true }},
+		{"legacy sha1", func(s *volSpec) { s.variant = sha1TC }, func(o *Options) { o.Legacy = true }},
 		{"named kdf and cipher", func(*volSpec) {}, func(o *Options) { o.KDF, o.Cipher = SHA512, AES }},
 		{"header mk_offset 0 means 512", func(s *volSpec) { s.mkOffset = 0; s.volSize = uint64(s.size) - 512 }, func(*Options) {}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			s := defaultVol()
+			s := defaultVol(t)
 			c.spec(&s)
 			img, plain := buildVolume(t, s)
 			if s.mkOffset == 0 {
@@ -86,7 +93,7 @@ func TestRoundTrip(t *testing.T) {
 }
 
 func TestHiddenAndBackup(t *testing.T) {
-	s := defaultVol()
+	s := defaultVol(t)
 	s.size = 512 << 10
 	s.headerOff = 65536
 	s.mkOffset = 256 << 10
@@ -120,7 +127,7 @@ func TestHiddenAndBackup(t *testing.T) {
 
 // TestTrial: without a named KDF or cipher, every allowed one is tried.
 func TestTrial(t *testing.T) {
-	s := defaultVol()
+	s := defaultVol(t)
 	s.cipher = TwofishAES
 	img, plain := buildVolume(t, s)
 	d, err := openImg(t, img, Options{Password: []byte("pw"), TrueCryptOnly: true})
@@ -138,7 +145,7 @@ func TestTrial(t *testing.T) {
 }
 
 func TestLimits(t *testing.T) {
-	img, _ := buildVolume(t, defaultVol())
+	img, _ := buildVolume(t, defaultVol(t))
 	for name, o := range map[string]Options{
 		"pim over the limit": {PIM: 1 << 30},
 		"negative pim":       {PIM: -1},
@@ -176,7 +183,7 @@ func TestRefusals(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			s := defaultVol()
+			s := defaultVol(t)
 			if c.spec != nil {
 				c.spec(&s)
 			}
@@ -206,7 +213,7 @@ func TestRefusals(t *testing.T) {
 }
 
 func TestHeaderPositions(t *testing.T) {
-	img, _ := buildVolume(t, defaultVol())
+	img, _ := buildVolume(t, defaultVol(t))
 	// a device too small for a hidden header at 64 KiB or 1536 from the end
 	small := img[:1024]
 	if _, err := openImg(t, small, Options{Password: []byte("pw"), Hidden: true, Backup: true}); !errors.Is(err, ErrCorrupt) {
@@ -231,7 +238,7 @@ func TestUnreadableHeader(t *testing.T) {
 }
 
 func TestReadAtEdges(t *testing.T) {
-	img, plain := buildVolume(t, defaultVol())
+	img, plain := buildVolume(t, defaultVol(t))
 	d, err := openImg(t, img, Options{Password: []byte("pw"), TrueCryptOnly: true})
 	if err != nil {
 		t.Fatal(err)
@@ -260,7 +267,7 @@ func TestReadAtEdges(t *testing.T) {
 }
 
 func TestOpenFile(t *testing.T) {
-	img, plain := buildVolume(t, defaultVol())
+	img, plain := buildVolume(t, defaultVol(t))
 	path := filepath.Join(t.TempDir(), "v.tc")
 	if err := os.WriteFile(path, img, 0o600); err != nil {
 		t.Fatal(err)
@@ -326,7 +333,7 @@ func TestStrings(t *testing.T) {
 			t.Errorf("variant %d is %s, want %s", i, v, want[i])
 		}
 	}
-	argon := variant("argon2id-t6-m425984KiB")
+	argon := variant(t, "argon2id-t6-m425984KiB")
 	if it, mem := argon.cost(40); it != 22 || mem != 1<<20 {
 		t.Errorf("argon2id pim 40: %d %d", it, mem)
 	}
