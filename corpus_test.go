@@ -3,6 +3,7 @@ package veracrypt
 import (
 	"archive/tar"
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -22,6 +23,9 @@ import (
 // committed: the test reads the archive named by TCRYPT_IMAGES and skips,
 // loudly, without it.
 const corpusEnv = "TCRYPT_IMAGES"
+
+// maxImage bounds one corpus image: 72 MiB.
+const maxImage = 72 << 20
 
 // Passwords from tcrypt-compat-test.
 const (
@@ -58,15 +62,12 @@ func loadCorpus(t *testing.T) map[string][]byte {
 		if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeGNUSparse {
 			continue
 		}
-		// System-encryption images (whole disks, up to 66 MiB) are not
-		// supported by this version: not even read.
-		if strings.Contains(h.Name, "/sys_") {
-			continue
-		}
-		if h.Size > 64<<20 {
+		// The largest image is a 66 MiB GPT disk (sys_vc_1_gpt_part-*);
+		// the bound stays, a little above it.
+		if h.Size > maxImage {
 			t.Fatalf("%s declares %d bytes", h.Name, h.Size)
 		}
-		b, err := io.ReadAll(io.LimitReader(tr, 64<<20))
+		b, err := io.ReadAll(io.LimitReader(tr, maxImage))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -154,6 +155,12 @@ func (im image) options(files map[string][]byte) Options {
 			o.Password = []byte(password72)
 		}
 	}
+	// System-encryption images: sys_vc_1_<mbr|gpt>_<full|part>, opened as
+	// tcrypt-compat-test does with --tcrypt-system.
+	if sys := strings.HasPrefix(im.prefix, "sys_"); sys {
+		o.System = true
+		im.prefix = strings.TrimPrefix(im.prefix, "sys_")
+	}
 	if strings.HasPrefix(im.prefix, "tc") {
 		o.TrueCryptOnly = true
 	}
@@ -164,7 +171,7 @@ func TestCorpus(t *testing.T) {
 	files := loadCorpus(t)
 	opened, refused := 0, 0
 	for name, img := range files {
-		if !strings.HasPrefix(name, "tc") && !strings.HasPrefix(name, "vc") {
+		if !strings.HasPrefix(name, "tc") && !strings.HasPrefix(name, "vc") && !strings.HasPrefix(name, "sys_") {
 			continue
 		}
 		im := parseName(name)
@@ -204,10 +211,11 @@ func TestCorpus(t *testing.T) {
 	}
 	t.Logf("%d opened, %d refused as not supported yet", opened, refused)
 	// The README and the docs publish these two numbers: every XTS image
-	// opens, and the LRW/CBC ones (TrueCrypt before 5.0) are refused. A
-	// change in either is a change in what this package reads, so it must
-	// fail here, not drift silently from the published figure.
-	const wantOpened, wantRefused = 62, 28
+	// opens (the 3 system-encryption images among them), and the LRW/CBC
+	// ones (TrueCrypt before 5.0) are refused. A change in either is a
+	// change in what this package reads, so it must fail here, not drift
+	// silently from the published figure.
+	const wantOpened, wantRefused = 65, 28
 	if opened != wantOpened || refused != wantRefused {
 		t.Fatalf("%d opened and %d refused, the README says %d and %d", opened, refused, wantOpened, wantRefused)
 	}
@@ -230,6 +238,63 @@ func TestCorpusFullTrial(t *testing.T) {
 	checkUUID(t, memDev{bytes.NewReader(img)}, int64(len(img)), o, "DEAD-BABE")
 }
 
+// TestCorpusSystem opens the three system-encryption images the way a user
+// would, naming neither the KDF nor the cipher (the boot rows are in the
+// trial), and checks where the decrypted area starts: the header's MK offset,
+// that is a whole-drive encryption's sector 63 (its filesystem is further in,
+// at partition 1's start), or the encrypted partition's first byte. Each
+// shows the FAT filesystem tcrypt-compat-test finds (UUID DEAD-BABE).
+func TestCorpusSystem(t *testing.T) {
+	files := loadCorpus(t)
+	for _, c := range []struct {
+		name, kdf string
+		size      func(img int) int64
+	}{
+		{"sys_vc_1_mbr_full-sha256-xts-aes", "pbkdf2-sha256-200000", func(img int) int64 { return int64(img) - 63*512 }},
+		{"sys_vc_1_mbr_part-sha256-xts-aes", "pbkdf2-sha256-200000", func(int) int64 { return 16 << 20 }},
+		{"sys_vc_1_gpt_part-sha512-xts-aes", "pbkdf2-sha512-500000", func(int) int64 { return 16 << 20 }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			img, ok := files[c.name]
+			if !ok {
+				t.Fatalf("%s is not in the corpus", c.name)
+			}
+			dev := memDev{bytes.NewReader(img)}
+			checkUUID(t, dev, int64(len(img)), Options{Password: []byte(password), System: true}, "DEAD-BABE")
+			d, err := OpenFrom(dev, int64(len(img)), Options{Password: []byte(password), System: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if h := d.Header(); !h.System() || h.KDF != c.kdf || d.Size() != c.size(len(img)) {
+				t.Errorf("system=%v kdf=%s size=%d, want %s %d", h.System(), h.KDF, d.Size(), c.kdf, c.size(len(img)))
+			}
+			// Not at byte 0: that is the boot loader, not a header.
+			o := Options{Password: []byte(password), KDF: SHA256, Cipher: AES}
+			if _, err := OpenFrom(dev, int64(len(img)), o); !errors.Is(err, ErrWrongSecret) {
+				t.Errorf("opened as an ordinary volume: %v", err)
+			}
+		})
+	}
+}
+
+// systemFSOffset is where the filesystem starts in a system device's
+// decrypted area. The area starts at the header's MK offset: an encrypted
+// partition's first byte, or, for a whole-drive encryption, sector 63, with
+// the filesystem further in, at its partition's start (read from the
+// unencrypted MBR) minus the MK offset. 0 for everything else.
+func systemFSOffset(dev memDev, d *Device, o Options) int64 {
+	if !o.System {
+		return 0
+	}
+	mbr := make([]byte, 512)
+	dev.ReadAt(mbr, 0)
+	start := int64(binary.LittleEndian.Uint32(mbr[454:])) * 512 // partition 1's first sector
+	if rel := start - int64(d.Header().MKOffset); rel > 0 && rel < d.Size() {
+		return rel
+	}
+	return 0
+}
+
 func checkUUID(t *testing.T, dev memDev, size int64, o Options, want string) {
 	t.Helper()
 	d, err := OpenFrom(dev, size, o)
@@ -237,7 +302,7 @@ func checkUUID(t *testing.T, dev memDev, size int64, o Options, want string) {
 		t.Fatalf("open (hidden=%v): %v", o.Hidden, err)
 	}
 	boot := make([]byte, 512)
-	if _, err := d.ReadAt(boot, 0); err != nil {
+	if _, err := d.ReadAt(boot, systemFSOffset(dev, d, o)); err != nil {
 		t.Fatal(err)
 	}
 	if got := fatUUID(boot); got != want {
