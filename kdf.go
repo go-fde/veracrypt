@@ -53,7 +53,10 @@ type kdfVariant struct {
 // (tcrypt.c:38, 41, 43; the Streebog one is commented out there too) cost
 // 200000 iterations for SHA-256 and BLAKE2s and 327661 for RIPEMD-160, and
 // their PIM formula is 2048 * PIM; they are tried for system encryption
-// only.
+// only. That is a deliberate difference from cryptsetup, which tries them
+// for every volume: VeraCrypt writes these costs only into the headers of
+// system volumes, so trying them elsewhere adds three derivations to every
+// wrong-password trial and can open nothing.
 var kdfVariants = []kdfVariant{
 	{kdf: RIPEMD160, iter: 2000},
 	{kdf: RIPEMD160, iter: 1000},
