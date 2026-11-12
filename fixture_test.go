@@ -21,7 +21,7 @@ func TestWriteFixture(t *testing.T) {
 		t.Skipf("%s is not set", fixtureEnv)
 	}
 	s := defaultVol()
-	s.magic, s.variant, s.password = "VERA", kdfVariants[4], "fde"
+	s.magic, s.variant, s.password = "VERA", variant("pbkdf2-sha512-500000"), "fde"
 	s.size, s.volSize = 131072+1024, 1024
 	img, plain := buildVolume(t, s)
 	d, err := openImg(t, img, Options{Password: []byte("fde"), KDF: SHA512})

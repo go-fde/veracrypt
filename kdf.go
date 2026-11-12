@@ -8,6 +8,8 @@ import (
 	"hash"
 	"hash/crc32"
 
+	"github.com/go-encryptions/streebog"
+	"github.com/go-encryptions/whirlpool"
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/blake2s"
 	"golang.org/x/crypto/pbkdf2"
@@ -21,14 +23,15 @@ const headerKeyLen = 192
 // KDF names a header key derivation, as cryptsetup names them.
 type KDF string
 
-// The KDFs this version derives with. Whirlpool and Streebog are not
-// implemented yet (no Go implementation in the fleet); a volume made with
-// them fails like a wrong password.
+// The KDFs this version derives with: every non-boot row of cryptsetup's
+// tcrypt_kdf[].
 const (
 	SHA512    KDF = "sha512"
 	SHA256    KDF = "sha256"
 	BLAKE2s   KDF = "blake2s-256"
 	RIPEMD160 KDF = "ripemd160"
+	Whirlpool KDF = "whirlpool"
+	Streebog  KDF = "stribog512" // GOST R 34.11-2012, 512-bit
 	Argon2id  KDF = "argon2id"
 	SHA1      KDF = "sha1" // TrueCrypt legacy only
 )
@@ -46,18 +49,20 @@ type kdfVariant struct {
 }
 
 // kdfVariants follows cryptsetup's tcrypt_kdf[] order, the boot-only
-// variants (system encryption, not supported here) left out, Whirlpool and
-// Streebog left out until they are implemented.
+// variants (system encryption, not supported here) left out.
 var kdfVariants = []kdfVariant{
 	{kdf: RIPEMD160, iter: 2000},
 	{kdf: RIPEMD160, iter: 1000},
 	{kdf: SHA512, iter: 1000},
+	{kdf: Whirlpool, iter: 1000},
 	{kdf: SHA1, legacy: true, iter: 2000},
 	{kdf: SHA512, veracrypt: true, iter: 500000, pimConst: 15000, pimMult: 1000},
+	{kdf: Whirlpool, veracrypt: true, iter: 500000, pimConst: 15000, pimMult: 1000},
 	{kdf: SHA256, veracrypt: true, iter: 500000, pimConst: 15000, pimMult: 1000},
 	{kdf: Argon2id, veracrypt: true, iter: 6, memKiB: 425984},
 	{kdf: BLAKE2s, veracrypt: true, iter: 500000, pimConst: 15000, pimMult: 1000},
 	{kdf: RIPEMD160, veracrypt: true, iter: 655331, pimConst: 15000, pimMult: 1000},
+	{kdf: Streebog, veracrypt: true, iter: 500000, pimConst: 15000, pimMult: 1000},
 }
 
 func hashFor(k KDF) func() hash.Hash {
@@ -70,6 +75,10 @@ func hashFor(k KDF) func() hash.Hash {
 		return func() hash.Hash { h, _ := blake2s.New256(nil); return h }
 	case RIPEMD160:
 		return ripemd160.New
+	case Whirlpool:
+		return whirlpool.New
+	case Streebog:
+		return streebog.New512
 	default: // SHA1
 		return sha1.New
 	}
