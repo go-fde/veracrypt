@@ -158,9 +158,13 @@ Once decrypted, the header is checked before use:
   interleaved rounds with `abbench`.
 - Serpent goes through
   [go-encryptions/serpent](https://github.com/go-encryptions/serpent)
-  v0.1.0, bitsliced pure Go, one block at a time. It is 2.1× (encryption)
-  and 2.5× (decryption) slower than Botan on one core, a gap tracked in
-  go-encryptions/serpent#2.
+  v0.2.0, bitsliced pure Go, four blocks at a time through xts's batch
+  path. A Serpent-XTS 4 KiB read runs at about 289 MiB/s on one Apple M4
+  Max core, against 127 MiB/s with v0.1.0's one block at a time (+127 %,
+  `BenchmarkXTSDecryptSerpent`, 6 interleaved rounds with `abbench`,
+  p = 0.002). serpent's own batch path is level with Botan's NEON Serpent
+  for decryption and 1.28× faster for encryption. amd64, where Botan runs
+  8–16 blocks with AVX2, is not measured yet (go-encryptions/serpent#2).
 - Camellia goes through
   [go-encryptions/camellia](https://github.com/go-encryptions/camellia)
   v0.1.0, pure Go, one block at a time. On one core it is level with
