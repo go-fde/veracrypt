@@ -13,7 +13,10 @@
 // The decrypted volume starts at its filesystem's first byte. This version
 // reads AES and Twofish (and VeraCrypt's AES-Twofish cascade) in XTS mode,
 // with PBKDF2 over SHA-512, SHA-256, BLAKE2s-256 or RIPEMD-160, or Argon2id;
-// PIM, keyfiles, hidden volumes and backup headers. It does not write.
+// PIM, keyfiles, hidden volumes and backup headers, and system encryption
+// (Options.System: an encrypted boot drive or system partition, header at
+// byte 31744, including VeraCrypt's boot KDF rows; not a hidden operating
+// system). It does not write.
 //
 // Untrusted images: the trial costs as much as the caller allows; Limits
 // bounds the number of key derivations, the PBKDF2 iterations and the
@@ -73,6 +76,20 @@ type Options struct {
 	Hidden bool
 	// Backup reads the backup header at the end of the device instead.
 	Backup bool
+	// System opens a system-encryption volume (an encrypted boot drive or
+	// system partition): the header is at byte 31744 of the whole drive
+	// (cryptsetup's tcrypt --tcrypt-system), VeraCrypt's boot KDF rows are
+	// tried as well, and the header's system flag must be set. The device
+	// is the whole drive, or an image of it (an image of the partition
+	// alone has no header to read). ReadAt offsets are relative to the
+	// start of the encrypted area, which is Header().MKOffset on the drive:
+	// for an encrypted partition, its first byte, so offset 0 is its
+	// filesystem; for a whole-drive encryption, sector 63 or later, before
+	// the first partition, so a partition starting at sector S is at
+	// offset S*512 - MKOffset (the MBR and boot loader in front of the
+	// area are not encrypted and not part of the Device). Not combinable
+	// with Hidden or Backup, and a hidden operating system is refused.
+	System bool
 	// TrueCryptOnly refuses VeraCrypt's "VERA" volumes and KDFs.
 	TrueCryptOnly bool
 	// Legacy also tries TrueCrypt's oldest KDF (PBKDF2-SHA-1).
@@ -89,6 +106,8 @@ func (o *Options) allowsKDF(v kdfVariant) bool {
 	case v.veracrypt && o.TrueCryptOnly:
 		return false
 	case o.PIM != 0 && !v.veracrypt:
+		return false
+	case v.boot && !o.System:
 		return false
 	}
 	return true
@@ -148,6 +167,12 @@ func OpenFrom(r ReadAtCloser, size int64, o Options) (*Device, error) {
 	// tries them; a position outside the device is not tried.
 	var offs []int64
 	switch {
+	case o.System && (o.Hidden || o.Backup):
+		// VeraCrypt keeps no backup of the system header on the drive, and a
+		// hidden operating system is a different layout (see newDevice).
+		return nil, fmt.Errorf("%w: System with Hidden or Backup", ErrUnsupported)
+	case o.System:
+		offs = []int64{systemOff}
 	case o.Hidden && o.Backup:
 		offs = []int64{size + hiddenBackOff}
 	case o.Hidden:
@@ -166,7 +191,7 @@ func OpenFrom(r ReadAtCloser, size int64, o Options) (*Device, error) {
 		var h *Header
 		h, err = unlockHeader(r, off, &o)
 		if err == nil {
-			return newDevice(r, size, h, o.Hidden)
+			return newDevice(r, size, h, o.Hidden, o.System)
 		}
 		if !errors.Is(err, ErrWrongSecret) {
 			return nil, err
@@ -175,10 +200,20 @@ func OpenFrom(r ReadAtCloser, size int64, o Options) (*Device, error) {
 	return nil, err
 }
 
-func newDevice(r ReadAtCloser, size int64, h *Header, hidden bool) (*Device, error) {
+// newDevice maps the data area of an unlocked header. For system encryption
+// the header's MK offset is the byte where the encrypted area starts on the
+// whole drive (the start of the encrypted partition, or sector 63 or later
+// for a whole-drive encryption), its volume size the area's length, and the
+// XTS tweak of its first sector is that offset / 512: the partition's
+// position on the drive, as cryptsetup's iv_offset (tcrypt.c:801-856).
+func newDevice(r ReadAtCloser, size int64, h *Header, hidden, system bool) (*Device, error) {
 	switch {
-	case h.System():
-		return nil, fmt.Errorf("%w: system encryption", ErrUnsupported)
+	case system && !h.System():
+		return nil, corrupt("the header at %d is not a system-encryption header (system flag unset)", systemOff)
+	case h.System() && !system:
+		return nil, fmt.Errorf("%w: system encryption (open the whole drive with Options.System)", ErrUnsupported)
+	case system && h.HiddenSize != 0:
+		return nil, fmt.Errorf("%w: hidden operating system", ErrUnsupported)
 	case h.SectorSize != sectorSize:
 		return nil, fmt.Errorf("%w: sector size %d", ErrUnsupported, h.SectorSize)
 	case h.Version < 3:
@@ -190,6 +225,9 @@ func newDevice(r ReadAtCloser, size int64, h *Header, hidden bool) (*Device, err
 		if h.Version == 3 { // TrueCrypt 5.x: the hidden volume ends 1536 bytes before the device does
 			dataOff = uint64(size) - h.HiddenSize - 1536
 		}
+	}
+	if system && dataOff < systemOff+headerSize {
+		return nil, corrupt("system data area at %d overlaps the header at %d", dataOff, systemOff)
 	}
 	if vsize == 0 || vsize%sectorSize != 0 || dataOff%sectorSize != 0 ||
 		dataOff > uint64(size) || uint64(size)-dataOff < vsize {

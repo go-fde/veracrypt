@@ -17,7 +17,8 @@ const (
 	hiddenOffOld  = -1536 // TrueCrypt before 6.0, from the end
 	backupOff     = -131072
 	hiddenBackOff = -65536
-	defaultMKOff  = 512 // cryptsetup: mk_offset 0 means 512
+	defaultMKOff  = 512   // cryptsetup: mk_offset 0 means 512
+	systemOff     = 31744 // TCRYPT_HDR_SYSTEM_OFFSET: sector 62 of the drive
 )
 
 // Errors. Every refusal of a malformed image wraps ErrCorrupt.

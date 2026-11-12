@@ -37,9 +37,32 @@ A KDF costs about half a second (500,000 PBKDF2 iterations, or Argon2id at
 | | |
 |---|---|
 | Ciphers (XTS) | every XTS chain VeraCrypt offers: AES, Camellia, Kuznyechik, Serpent, Twofish, and the cascades AES-Twofish, AES-Twofish-Serpent, Camellia-Kuznyechik, Camellia-Serpent, Kuznyechik-AES, Kuznyechik-Serpent-Camellia, Kuznyechik-Twofish, Serpent-AES, Serpent-Twofish-AES, Twofish-Serpent (cryptsetup's names list them in reverse: `twofish-aes`, `kuznyechik-camellia`, …) |
-| KDFs | every non-boot KDF VeraCrypt and TrueCrypt use: PBKDF2 with SHA-512, SHA-256, BLAKE2s-256, RIPEMD-160, Whirlpool or Streebog-512; Argon2id; TrueCrypt's PBKDF2-SHA-1 with `Legacy` |
+| KDFs | every KDF VeraCrypt and TrueCrypt use: PBKDF2 with SHA-512, SHA-256, BLAKE2s-256, RIPEMD-160, Whirlpool or Streebog-512; Argon2id; TrueCrypt's PBKDF2-SHA-1 with `Legacy`; with `System`, also VeraCrypt's boot rows (SHA-256 and BLAKE2s-256 at 200,000 iterations, RIPEMD-160 at 327,661, PIM multiplier 2048) |
 | Options | PIM, keyfiles (up to 1 MiB each), passwords up to 128 bytes |
-| Volumes | normal, hidden, backup headers; VeraCrypt and TrueCrypt 5.0 and later |
+| Volumes | normal, hidden, backup headers; system encryption (`System`); VeraCrypt and TrueCrypt 5.0 and later |
+
+## System encryption
+
+`Options{System: true}` opens an encrypted boot drive or system partition,
+read-only. Give it the whole drive (or an image of it): the header is at
+byte 31744 of the drive, outside the encrypted area, so an image of the
+partition alone has no header to read. The system flag must be set in the
+header, as cryptsetup's `--tcrypt-system` does.
+
+`ReadAt` offsets are relative to the start of the encrypted area, which is
+`Header().MKOffset` on the drive, and the area is `Header().VolumeSize`
+long:
+
+- an encrypted **partition**: offset 0 is the partition's first byte, so the
+  filesystem is at 0;
+- a **whole-drive** encryption: the area starts at sector 63 or later, in
+  front of the first partition, so a partition starting at sector `S` is at
+  offset `S*512 - MKOffset`. The MBR and the boot loader before the area are
+  not encrypted and are not part of the device; read them from the drive.
+
+The XTS tweak of each sector is its sector number on the drive, as in
+cryptsetup (`iv_offset`). A hidden operating system, and `System` combined
+with `Hidden` or `Backup`, are refused with `ErrUnsupported`.
 
 The following are **not supported yet**. A volume that uses them fails like
 a wrong password, because nothing on disk can tell the two apart.
@@ -48,7 +71,8 @@ a wrong password, because nothing on disk can tell the two apart.
 
 These are refused with `ErrUnsupported`:
 
-- system encryption;
+- a hidden operating system (a system header that records a hidden size),
+  and a system header opened without `System`;
 - sector sizes other than 512 bytes.
 
 Writing is not implemented: `WriteAt` returns `ErrReadOnly`.
@@ -60,15 +84,18 @@ which VeraCrypt and TrueCrypt made, with the passwords, PIMs and keyfiles
 of `tests/tcrypt-compat-test`. The FAT filesystem inside must have the
 UUID that test checks: `DEAD-BABE`, or `CAFE-BABE` in a hidden volume.
 
-- All 62 XTS volumes open and match, covering:
+- All 65 XTS volumes open and match, covering:
   - VeraCrypt and TrueCrypt;
   - SHA-512, SHA-256, BLAKE2s, RIPEMD-160, Whirlpool, Streebog-512 and
     Argon2id;
   - PIM, keyfiles, and a 72-byte password;
   - hidden volumes, including TrueCrypt 5's;
+  - the three system-encryption images (`sys_vc_1_mbr_full`,
+    `sys_vc_1_mbr_part` and `sys_vc_1_gpt_part`, up to 66 MiB), opened as
+    `--tcrypt-system` does, with the same FAT UUID;
   - every cipher alone, and seven of the ten cascades.
 - The 28 LRW and CBC volumes (TrueCrypt before 5.0) must be refused rather
-  than misread. System-encryption images are not read.
+  than misread.
 
 Reversing the cascade's decryption order fails all 22 cascade volumes, so
 the order is checked. Serpent's and Kuznyechik's byte orders are confirmed
@@ -108,7 +135,8 @@ Once decrypted, the header is checked before use:
 
 - both CRC-32s;
 - the data area lies inside the device;
-- every offset is aligned to the sector size.
+- every offset is aligned to the sector size;
+- a system data area does not overlap the header at 31744.
 
 `FuzzParse` fuzzes those checks.
 

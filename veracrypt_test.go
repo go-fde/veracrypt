@@ -317,13 +317,14 @@ func TestKeyPool(t *testing.T) {
 }
 
 func TestStrings(t *testing.T) {
-	// cryptsetup's tcrypt_kdf[] (lib/tcrypt/tcrypt.c), boot-only rows left
-	// out: the trial order must be the same.
+	// cryptsetup's tcrypt_kdf[] (lib/tcrypt/tcrypt.c), boot rows included
+	// (Streebog's is commented out there): the trial order must be the same.
 	want := []string{
 		"pbkdf2-ripemd160-2000", "pbkdf2-ripemd160-1000", "pbkdf2-sha512-1000",
 		"pbkdf2-whirlpool-1000", "pbkdf2-sha1-2000", "pbkdf2-sha512-500000",
-		"pbkdf2-whirlpool-500000", "pbkdf2-sha256-500000", "argon2id-t6-m425984KiB",
-		"pbkdf2-blake2s-256-500000", "pbkdf2-ripemd160-655331", "pbkdf2-stribog512-500000",
+		"pbkdf2-whirlpool-500000", "pbkdf2-sha256-500000", "pbkdf2-sha256-200000",
+		"argon2id-t6-m425984KiB", "pbkdf2-blake2s-256-500000", "pbkdf2-blake2s-256-200000",
+		"pbkdf2-ripemd160-655331", "pbkdf2-ripemd160-327661", "pbkdf2-stribog512-500000",
 	}
 	if len(kdfVariants) != len(want) {
 		t.Fatalf("%d variants, want %d", len(kdfVariants), len(want))
@@ -332,6 +333,10 @@ func TestStrings(t *testing.T) {
 		if v.String() != want[i] {
 			t.Errorf("variant %d is %s, want %s", i, v, want[i])
 		}
+	}
+	boot := variant(t, "pbkdf2-ripemd160-327661")
+	if it, _ := boot.cost(98); it != 98*2048 || !boot.boot {
+		t.Errorf("boot pim 98: %d", it)
 	}
 	argon := variant(t, "argon2id-t6-m425984KiB")
 	if it, mem := argon.cost(40); it != 22 || mem != 1<<20 {

@@ -23,8 +23,8 @@ const headerKeyLen = 192
 // KDF names a header key derivation, as cryptsetup names them.
 type KDF string
 
-// The KDFs this version derives with: every non-boot row of cryptsetup's
-// tcrypt_kdf[].
+// The KDFs this version derives with: every row of cryptsetup's
+// tcrypt_kdf[] (the boot rows reuse these names).
 const (
 	SHA512    KDF = "sha512"
 	SHA256    KDF = "sha256"
@@ -42,14 +42,21 @@ type kdfVariant struct {
 	kdf       KDF
 	veracrypt bool
 	legacy    bool // TrueCrypt's oldest (SHA-1) mode
+	boot      bool // VeraCrypt's BIOS boot loader's cheaper rows: system encryption only
 	iter      int  // PBKDF2 iterations, or Argon2id passes
 	memKiB    uint32
 	pimConst  int
 	pimMult   int
 }
 
-// kdfVariants follows cryptsetup's tcrypt_kdf[] order, the boot-only
-// variants (system encryption, not supported here) left out.
+// kdfVariants follows cryptsetup's tcrypt_kdf[] order. The boot rows
+// (tcrypt.c:38, 41, 43; the Streebog one is commented out there too) cost
+// 200000 iterations for SHA-256 and BLAKE2s and 327661 for RIPEMD-160, and
+// their PIM formula is 2048 * PIM; they are tried for system encryption
+// only. That is a deliberate difference from cryptsetup, which tries them
+// for every volume: VeraCrypt writes these costs only into the headers of
+// system volumes, so trying them elsewhere adds three derivations to every
+// wrong-password trial and can open nothing.
 var kdfVariants = []kdfVariant{
 	{kdf: RIPEMD160, iter: 2000},
 	{kdf: RIPEMD160, iter: 1000},
@@ -59,9 +66,12 @@ var kdfVariants = []kdfVariant{
 	{kdf: SHA512, veracrypt: true, iter: 500000, pimConst: 15000, pimMult: 1000},
 	{kdf: Whirlpool, veracrypt: true, iter: 500000, pimConst: 15000, pimMult: 1000},
 	{kdf: SHA256, veracrypt: true, iter: 500000, pimConst: 15000, pimMult: 1000},
+	{kdf: SHA256, veracrypt: true, boot: true, iter: 200000, pimMult: 2048},
 	{kdf: Argon2id, veracrypt: true, iter: 6, memKiB: 425984},
 	{kdf: BLAKE2s, veracrypt: true, iter: 500000, pimConst: 15000, pimMult: 1000},
+	{kdf: BLAKE2s, veracrypt: true, boot: true, iter: 200000, pimMult: 2048},
 	{kdf: RIPEMD160, veracrypt: true, iter: 655331, pimConst: 15000, pimMult: 1000},
+	{kdf: RIPEMD160, veracrypt: true, boot: true, iter: 327661, pimMult: 2048},
 	{kdf: Streebog, veracrypt: true, iter: 500000, pimConst: 15000, pimMult: 1000},
 }
 
