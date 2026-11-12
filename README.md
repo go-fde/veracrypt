@@ -115,7 +115,7 @@ Once decrypted, the header is checked before use:
 ## Performance
 
 - AES volumes decrypt through
-  [go-encryptions/xts](https://github.com/go-encryptions/xts) v0.2.0
+  [go-encryptions/xts](https://github.com/go-encryptions/xts) v0.3.0
   `DecryptSectors`, which is ahead of OpenSSL on one core.
 - Twofish goes through
   [go-encryptions/twofish](https://github.com/go-encryptions/twofish)
