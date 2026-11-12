@@ -115,14 +115,16 @@ Once decrypted, the header is checked before use:
 ## Performance
 
 - AES volumes decrypt through
-  [go-encryptions/xts](https://github.com/go-encryptions/xts) v0.2.0
+  [go-encryptions/xts](https://github.com/go-encryptions/xts) v0.3.0
   `DecryptSectors`, which is ahead of OpenSSL on one core.
-- Twofish goes through `golang.org/x/crypto/twofish` one block at a time,
-  and it is **3.8× slower than Botan** on one core: about 145 MiB/s
-  against about 550 MiB/s on 1 KiB (`BenchmarkBlockTwofish*` against
-  `botan speed Twofish`). A Twofish-XTS 4 KiB read decrypts at 126 MiB/s,
-  against 11 GiB/s for AES (`BenchmarkXTSDecrypt*`). A fleet Twofish
-  module with Botan's precomputed key tables is in progress
+- Twofish goes through
+  [go-encryptions/twofish](https://github.com/go-encryptions/twofish)
+  v0.1.1, with Botan's full-key precomputed tables. xts v0.3.0 hands it a
+  whole sector per call, which it runs four blocks at a time. Against the
+  previous `golang.org/x/crypto/twofish`, a Twofish-XTS 4 KiB read is
+  **2.4× faster** (+141 %, `BenchmarkXTSDecryptTwofish`, 6 interleaved
+  rounds with `abbench`, p = 0.002), and AES is unchanged. The comparison
+  with Botan's absolute speed is still to be measured on a quiet machine
   (veracrypt#3).
 - Serpent goes through
   [go-encryptions/serpent](https://github.com/go-encryptions/serpent)

@@ -7,8 +7,8 @@ import (
 	"github.com/go-encryptions/camellia"
 	"github.com/go-encryptions/kuznyechik"
 	"github.com/go-encryptions/serpent"
+	"github.com/go-encryptions/twofish"
 	"github.com/go-encryptions/xts"
-	"golang.org/x/crypto/twofish"
 )
 
 // Cipher names an XTS cipher or cascade, as cryptsetup names it: the
