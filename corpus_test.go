@@ -106,6 +106,10 @@ func kdfOf(h string) (KDF, bool) {
 		return RIPEMD160, true
 	case "argon2id":
 		return Argon2id, true
+	case "whirlpool":
+		return Whirlpool, true
+	case "stribog512":
+		return Streebog, true
 	}
 	return "", false
 }

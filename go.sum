@@ -6,6 +6,10 @@ github.com/go-encryptions/kuznyechik v0.1.0 h1:19xwI7S6wqInVmI7TsE022NXRX32Krd2/
 github.com/go-encryptions/kuznyechik v0.1.0/go.mod h1:NjtF55qcESMhbcr2xL0JAunEAgpln4hIswf9PnwkCgw=
 github.com/go-encryptions/serpent v0.1.0 h1:d13mzIis+yQ/X3j1z1XVMSz15r5hr2ty6Fg/3lhKcSU=
 github.com/go-encryptions/serpent v0.1.0/go.mod h1:kXXpRWtBvpI0BowZqSwqbIeMA0kgwNTL/wxShV7JUHg=
+github.com/go-encryptions/streebog v0.2.0 h1:o+yCfM2obQZbXnd6/CL86VzHYXoRCg3l63jhtpEu9uE=
+github.com/go-encryptions/streebog v0.2.0/go.mod h1:QHWUqItfjsVtXM39nBsNZi8NfelJYSNVtD2N1DDbs08=
+github.com/go-encryptions/whirlpool v0.2.0 h1:18INP5DPGeazdXpAXNXUA3UfNxbP6Ip3qbi+ZNzq+8w=
+github.com/go-encryptions/whirlpool v0.2.0/go.mod h1:DlEGCh+3pFWIT8sf9SNqvGmU9Xz0D6awaqaIGvptQDk=
 github.com/go-encryptions/xts v0.2.0 h1:iy/XXrD1V5h4jZp1MX6Rfa/Tx/0XzBGmShacc3Bq810=
 github.com/go-encryptions/xts v0.2.0/go.mod h1:MpappevOqsWjrgi8lxnzHp1ylO8q8biBVsL0VWHidfQ=
 github.com/ulikunitz/xz v0.5.17 h1:flR0y/x1hgM8EGV1AW3Xll6T413G0glV8UfBwR617V4=

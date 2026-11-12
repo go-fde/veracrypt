@@ -37,14 +37,13 @@ A KDF costs about half a second (500,000 PBKDF2 iterations, or Argon2id at
 | | |
 |---|---|
 | Ciphers (XTS) | every XTS chain VeraCrypt offers: AES, Camellia, Kuznyechik, Serpent, Twofish, and the cascades AES-Twofish, AES-Twofish-Serpent, Camellia-Kuznyechik, Camellia-Serpent, Kuznyechik-AES, Kuznyechik-Serpent-Camellia, Kuznyechik-Twofish, Serpent-AES, Serpent-Twofish-AES, Twofish-Serpent (cryptsetup's names list them in reverse: `twofish-aes`, `kuznyechik-camellia`, …) |
-| KDFs | PBKDF2 with SHA-512, SHA-256, BLAKE2s-256 or RIPEMD-160; Argon2id; TrueCrypt's PBKDF2-SHA-1 with `Legacy` |
+| KDFs | every non-boot KDF VeraCrypt and TrueCrypt use: PBKDF2 with SHA-512, SHA-256, BLAKE2s-256, RIPEMD-160, Whirlpool or Streebog-512; Argon2id; TrueCrypt's PBKDF2-SHA-1 with `Legacy` |
 | Options | PIM, keyfiles (up to 1 MiB each), passwords up to 128 bytes |
 | Volumes | normal, hidden, backup headers; VeraCrypt and TrueCrypt 5.0 and later |
 
 The following are **not supported yet**. A volume that uses them fails like
 a wrong password, because nothing on disk can tell the two apart.
 
-- The Whirlpool and Streebog KDFs (go-fde/fde#28).
 - TrueCrypt's LRW and CBC modes, and headers older than version 3.
 
 These are refused with `ErrUnsupported`:
@@ -61,14 +60,15 @@ which VeraCrypt and TrueCrypt made, with the passwords, PIMs and keyfiles
 of `tests/tcrypt-compat-test`. The FAT filesystem inside must have the
 UUID that test checks: `DEAD-BABE`, or `CAFE-BABE` in a hidden volume.
 
-- 59 volumes open and match, covering:
+- All 62 XTS volumes open and match, covering:
   - VeraCrypt and TrueCrypt;
-  - SHA-512, SHA-256, BLAKE2s, RIPEMD-160 and Argon2id;
+  - SHA-512, SHA-256, BLAKE2s, RIPEMD-160, Whirlpool, Streebog-512 and
+    Argon2id;
   - PIM, keyfiles, and a 72-byte password;
   - hidden volumes, including TrueCrypt 5's;
   - every cipher alone, and seven of the ten cascades.
-- The 31 volumes using primitives not supported yet must be refused rather
-  than misread.
+- The 28 LRW and CBC volumes (TrueCrypt before 5.0) must be refused rather
+  than misread. System-encryption images are not read.
 
 Reversing the cascade's decryption order fails all 22 cascade volumes, so
 the order is checked. Serpent's and Kuznyechik's byte orders are confirmed
@@ -134,7 +134,14 @@ Once decrypted, the header is checked before use:
   v0.1.0, pure Go with lookup tables. On one core it is 1.14× (encryption)
   and 1.16× (decryption) faster than Botan 3.14.1.
 - The KDFs cost what the format specifies; that cost is the point of the
-  format.
+  format. Whirlpool and Streebog come from
+  [go-encryptions/whirlpool](https://github.com/go-encryptions/whirlpool)
+  and [go-encryptions/streebog](https://github.com/go-encryptions/streebog)
+  v0.2.0. Both save their state, so HMAC does not rehash the key on every
+  PBKDF2 iteration. Streebog is 1.8× faster than Botan; Whirlpool is 1.15×
+  slower (go-encryptions/whirlpool#1).
+- A wrong password costs the whole trial: every KDF, Whirlpool and Streebog
+  now included. Naming the KDF in `Options` avoids it.
 
 ## References
 

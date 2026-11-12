@@ -39,12 +39,19 @@ func TestRoundTrip(t *testing.T) {
 		{"kuznyechik-twofish cascade", func(s *volSpec) { s.cipher = TwofishKuznyechik }, func(*Options) {}},
 		{"serpent-twofish-aes cascade", func(s *volSpec) { s.cipher = AESTwofishSerpent }, func(*Options) {}},
 		{"veracrypt pim", func(s *volSpec) {
-			s.magic, s.variant, s.pim = "VERA", kdfVariants[4], 1
+			s.magic, s.variant, s.pim = "VERA", variant("pbkdf2-sha512-500000"), 1
 		}, func(o *Options) { o.PIM, o.KDF = 1, SHA512 }},
+		{"truecrypt whirlpool", func(s *volSpec) { s.variant = variant("pbkdf2-whirlpool-1000") }, func(o *Options) { o.KDF = Whirlpool }},
+		{"veracrypt whirlpool pim", func(s *volSpec) {
+			s.magic, s.variant, s.pim = "VERA", variant("pbkdf2-whirlpool-500000"), 1
+		}, func(o *Options) { o.PIM, o.KDF = 1, Whirlpool }},
+		{"veracrypt streebog pim", func(s *volSpec) {
+			s.magic, s.variant, s.pim = "VERA", variant("pbkdf2-stribog512-500000"), 1
+		}, func(o *Options) { o.PIM, o.KDF = 1, Streebog }},
 		{"keyfiles", func(s *volSpec) {
 			s.keyfiles = [][]byte{[]byte("one"), bytes.Repeat([]byte{9}, 300)}
 		}, func(o *Options) { o.Keyfiles = [][]byte{[]byte("one"), bytes.Repeat([]byte{9}, 300)} }},
-		{"legacy sha1", func(s *volSpec) { s.variant = kdfVariants[3] }, func(o *Options) { o.Legacy = true }},
+		{"legacy sha1", func(s *volSpec) { s.variant = variant("pbkdf2-sha1-2000") }, func(o *Options) { o.Legacy = true }},
 		{"named kdf and cipher", func(*volSpec) {}, func(o *Options) { o.KDF, o.Cipher = SHA512, AES }},
 		{"header mk_offset 0 means 512", func(s *volSpec) { s.mkOffset = 0; s.volSize = uint64(s.size) - 512 }, func(*Options) {}},
 	}
@@ -303,16 +310,27 @@ func TestKeyPool(t *testing.T) {
 }
 
 func TestStrings(t *testing.T) {
-	if s := kdfVariants[6].String(); s != "argon2id-t6-m425984KiB" {
-		t.Error(s)
+	// cryptsetup's tcrypt_kdf[] (lib/tcrypt/tcrypt.c), boot-only rows left
+	// out: the trial order must be the same.
+	want := []string{
+		"pbkdf2-ripemd160-2000", "pbkdf2-ripemd160-1000", "pbkdf2-sha512-1000",
+		"pbkdf2-whirlpool-1000", "pbkdf2-sha1-2000", "pbkdf2-sha512-500000",
+		"pbkdf2-whirlpool-500000", "pbkdf2-sha256-500000", "argon2id-t6-m425984KiB",
+		"pbkdf2-blake2s-256-500000", "pbkdf2-ripemd160-655331", "pbkdf2-stribog512-500000",
 	}
-	if s := kdfVariants[4].String(); s != "pbkdf2-sha512-500000" {
-		t.Error(s)
+	if len(kdfVariants) != len(want) {
+		t.Fatalf("%d variants, want %d", len(kdfVariants), len(want))
 	}
-	if it, mem := kdfVariants[6].cost(40); it != 22 || mem != 1<<20 {
+	for i, v := range kdfVariants {
+		if v.String() != want[i] {
+			t.Errorf("variant %d is %s, want %s", i, v, want[i])
+		}
+	}
+	argon := variant("argon2id-t6-m425984KiB")
+	if it, mem := argon.cost(40); it != 22 || mem != 1<<20 {
 		t.Errorf("argon2id pim 40: %d %d", it, mem)
 	}
-	if it, mem := kdfVariants[6].cost(8); it != 5 || mem != 1024*(64+7*32) {
+	if it, mem := argon.cost(8); it != 5 || mem != 1024*(64+7*32) {
 		t.Errorf("argon2id pim 8: %d %d", it, mem)
 	}
 	h := &Header{Flags: 1}

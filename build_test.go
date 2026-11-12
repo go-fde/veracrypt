@@ -29,12 +29,24 @@ type volSpec struct {
 	badKeyCRC  bool
 }
 
+// variant returns the kdfVariants row whose String() is name. Tests name
+// rows instead of indexing them: inserting a row (as cryptsetup's table
+// order requires) must not silently change which KDF a test uses.
+func variant(name string) kdfVariant {
+	for _, v := range kdfVariants {
+		if v.String() == name {
+			return v
+		}
+	}
+	panic("no KDF variant " + name)
+}
+
 func defaultVol() volSpec {
 	return volSpec{
 		size:     256 << 10,
 		magic:    "TRUE",
 		version:  5,
-		variant:  kdfVariants[2], // pbkdf2-sha512-1000: cheap
+		variant:  variant("pbkdf2-sha512-1000"), // cheap
 		cipher:   AES,
 		password: "pw",
 		mkOffset: 131072,
