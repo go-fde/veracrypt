@@ -203,8 +203,13 @@ func TestCorpus(t *testing.T) {
 		})
 	}
 	t.Logf("%d opened, %d refused as not supported yet", opened, refused)
-	if opened == 0 {
-		t.Fatal("no image opened")
+	// The README and the docs publish these two numbers: every XTS image
+	// opens, and the LRW/CBC ones (TrueCrypt before 5.0) are refused. A
+	// change in either is a change in what this package reads, so it must
+	// fail here, not drift silently from the published figure.
+	const wantOpened, wantRefused = 62, 28
+	if opened != wantOpened || refused != wantRefused {
+		t.Fatalf("%d opened and %d refused, the README says %d and %d", opened, refused, wantOpened, wantRefused)
 	}
 }
 

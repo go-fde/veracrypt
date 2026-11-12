@@ -18,9 +18,10 @@ env:
   TCRYPT_SHA256: cf65f0b336a623c2d5510e6ad63d364a9ade1dd46ac8407e63a0e95b17823272
 
 jobs:
-  # The corpus opens ~35 volumes, each with VeraCrypt's real KDF costs
-  # (500,000 PBKDF2 iterations, Argon2id at 416 MiB): about a minute plain,
-  # past ten under -race. So the corpus and the 100% coverage gate run
+  # The corpus opens 62 volumes (TestCorpus asserts 62 opened, 28 refused),
+  # each with VeraCrypt's real KDF costs (500,000 PBKDF2 iterations,
+  # Argon2id at 416 MiB), plus one full trial over every KDF: over a minute
+  # plain, past ten under -race. So the corpus and the 100% coverage gate run
   # without -race, and -race runs on the unit tests.
   corpus:
     name: corpus + coverage (${{ matrix.arch }})
