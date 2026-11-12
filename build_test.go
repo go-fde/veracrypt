@@ -31,22 +31,26 @@ type volSpec struct {
 
 // variant returns the kdfVariants row whose String() is name. Tests name
 // rows instead of indexing them: inserting a row (as cryptsetup's table
-// order requires) must not silently change which KDF a test uses.
-func variant(name string) kdfVariant {
+// order requires) must not silently change which KDF a test uses. A
+// missing name fails the calling test only, so the rest of the binary
+// (TestStrings, which pins the table) still runs and says why.
+func variant(tb testing.TB, name string) kdfVariant {
+	tb.Helper()
 	for _, v := range kdfVariants {
 		if v.String() == name {
 			return v
 		}
 	}
-	panic("no KDF variant " + name)
+	tb.Fatalf("no KDF variant %s", name)
+	return kdfVariant{}
 }
 
-func defaultVol() volSpec {
+func defaultVol(tb testing.TB) volSpec {
 	return volSpec{
 		size:     256 << 10,
 		magic:    "TRUE",
 		version:  5,
-		variant:  variant("pbkdf2-sha512-1000"), // cheap
+		variant:  variant(tb, "pbkdf2-sha512-1000"), // cheap
 		cipher:   AES,
 		password: "pw",
 		mkOffset: 131072,
