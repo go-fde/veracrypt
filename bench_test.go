@@ -58,3 +58,4 @@ func benchXTS(b *testing.B, name Cipher) {
 
 func BenchmarkXTSDecryptTwofish(b *testing.B) { benchXTS(b, Twofish) }
 func BenchmarkXTSDecryptAES(b *testing.B)     { benchXTS(b, AES) }
+func BenchmarkXTSDecryptSerpent(b *testing.B) { benchXTS(b, Serpent) }
