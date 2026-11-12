@@ -15,6 +15,9 @@ func benchBlock(b *testing.B, name Cipher, decrypt bool) {
 			c = ch
 		}
 	}
+	if len(c.links) == 0 {
+		b.Fatalf("no chain %s", name)
+	}
 	blk, err := c.links[0].newBlock(testKeys[:32])
 	if err != nil {
 		b.Fatal(err)
