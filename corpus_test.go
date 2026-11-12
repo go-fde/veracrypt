@@ -212,8 +212,8 @@ func TestCorpus(t *testing.T) {
 // cipher, as a user would. TestCorpus names both to stay fast, so without
 // this the trial order over real images would never run in CI.
 // vc_1-stribog512-xts-camellia is the worst case: Streebog is the last row
-// of the KDF table, so every KDF runs before the one that matches (about
-// 23 s on an M4 Max).
+// of the KDF table, so every KDF runs before the one that matches (11 s on
+// one M4 Max core, 23 s under load).
 func TestCorpusFullTrial(t *testing.T) {
 	files := loadCorpus(t)
 	const name = "vc_1-stribog512-xts-camellia"
