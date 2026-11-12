@@ -37,7 +37,7 @@ A KDF costs about half a second (500,000 PBKDF2 iterations, or Argon2id at
 | | |
 |---|---|
 | Ciphers (XTS) | every XTS chain VeraCrypt offers: AES, Camellia, Kuznyechik, Serpent, Twofish, and the cascades AES-Twofish, AES-Twofish-Serpent, Camellia-Kuznyechik, Camellia-Serpent, Kuznyechik-AES, Kuznyechik-Serpent-Camellia, Kuznyechik-Twofish, Serpent-AES, Serpent-Twofish-AES, Twofish-Serpent (cryptsetup's names list them in reverse: `twofish-aes`, `kuznyechik-camellia`, …) |
-| KDFs | every KDF VeraCrypt and TrueCrypt use: PBKDF2 with SHA-512, SHA-256, BLAKE2s-256, RIPEMD-160, Whirlpool or Streebog-512; Argon2id; TrueCrypt's PBKDF2-SHA-1 with `Legacy`; with `System`, also VeraCrypt's boot rows (SHA-256 and BLAKE2s-256 at 200,000 iterations, RIPEMD-160 at 327,661, PIM multiplier 2048) |
+| KDFs | every KDF cryptsetup's tcrypt tries: PBKDF2 with SHA-512, SHA-256, BLAKE2s-256, RIPEMD-160, Whirlpool or Streebog-512; Argon2id; TrueCrypt's PBKDF2-SHA-1 with `Legacy`; with `System`, also VeraCrypt's boot rows (SHA-256 and BLAKE2s-256 at 200,000 iterations, RIPEMD-160 at 327,661, PIM multiplier 2048); not VeraCrypt's Streebog boot row (200,000 iterations), which cryptsetup comments out too (`tcrypt.c:45`) |
 | Options | PIM, keyfiles (up to 1 MiB each), passwords up to 128 bytes |
 | Volumes | normal, hidden, backup headers; system encryption (`System`); VeraCrypt and TrueCrypt 5.0 and later |
 
