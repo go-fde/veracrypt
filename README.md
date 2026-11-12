@@ -115,17 +115,19 @@ Once decrypted, the header is checked before use:
 ## Performance
 
 - AES volumes decrypt through
-  [go-encryptions/xts](https://github.com/go-encryptions/xts) v0.3.0
+  [go-encryptions/xts](https://github.com/go-encryptions/xts) v0.3.1
   `DecryptSectors`, which is ahead of OpenSSL on one core.
 - Twofish goes through
   [go-encryptions/twofish](https://github.com/go-encryptions/twofish)
-  v0.1.1, with Botan's full-key precomputed tables. xts v0.3.0 hands it a
-  whole sector per call, which it runs four blocks at a time. Against the
-  previous `golang.org/x/crypto/twofish`, a Twofish-XTS 4 KiB read is
-  **2.4× faster** (+141 %, `BenchmarkXTSDecryptTwofish`, 6 interleaved
-  rounds with `abbench`, p = 0.002), and AES is unchanged. The comparison
-  with Botan's absolute speed is still to be measured on a quiet machine
-  (veracrypt#3).
+  v0.1.1, with Botan's full-key precomputed tables. xts hands it a whole
+  sector per call, which it runs four blocks at a time, and since v0.3.1
+  it keeps the tweak in 64-bit words. A Twofish-XTS 4 KiB read runs at
+  about **611 MiB/s** on one Apple M4 Max core, against 486 MiB/s for
+  Botan 3.14.1's own Twofish/XTS on the same machine, and about 133 MiB/s
+  with the former `golang.org/x/crypto/twofish` (the v0.5.0 side of the
+  `abbench` run posted on veracrypt#3). The figures come from xts's
+  `BenchmarkBatchTwofish` and this package's `BenchmarkXTSDecryptTwofish`,
+  interleaved rounds with `abbench`.
 - Serpent goes through
   [go-encryptions/serpent](https://github.com/go-encryptions/serpent)
   v0.1.0, bitsliced pure Go, one block at a time. It is 2.1× (encryption)

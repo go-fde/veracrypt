@@ -10,7 +10,7 @@ require (
 	github.com/go-encryptions/streebog v0.2.0
 	github.com/go-encryptions/twofish v0.1.1
 	github.com/go-encryptions/whirlpool v0.2.0
-	github.com/go-encryptions/xts v0.3.0
+	github.com/go-encryptions/xts v0.3.1
 	golang.org/x/crypto v0.58.0
 )
 
