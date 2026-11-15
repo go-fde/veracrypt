@@ -1,0 +1,6 @@
+go test fuzz v1
+string("aes")
+string("ripemd160")
+int(1)
+int64(300032)
+[]byte("pw")

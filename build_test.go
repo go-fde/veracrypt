@@ -77,19 +77,6 @@ func chainNamed(t testing.TB, c Cipher) chain {
 	return chain{}
 }
 
-// encrypt is decrypt's inverse: the first link first.
-func (x *xtsChain) encryptUnit(p []byte) {
-	for _, l := range x.links {
-		l.Encrypt(p, p, 0)
-	}
-}
-
-func (x *xtsChain) encryptSectors(p []byte, first uint64) {
-	for _, l := range x.links {
-		l.EncryptSectors(p, p, sectorSize, first)
-	}
-}
-
 // buildVolume writes s's header at s.headerOff and its data area at
 // s.mkOffset, and returns the image and the plaintext of the data area.
 func buildVolume(t testing.TB, s volSpec) (img, plain []byte) {

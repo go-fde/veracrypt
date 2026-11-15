@@ -87,6 +87,7 @@ func newXTSChain(c chain, key []byte) *xtsChain {
 		k := make([]byte, 0, 64)
 		k = append(append(k, key[l.keyOff:l.keyOff+32]...), key[l.tweakOff:l.tweakOff+32]...)
 		xc, _ := xts.NewCipher(l.newBlock, k)
+		clear(k)
 		x.links = append(x.links, xc)
 	}
 	return x
@@ -106,5 +107,19 @@ func (x *xtsChain) decryptSectors(p []byte, first uint64) {
 func (x *xtsChain) decryptUnit(p []byte) {
 	for i := len(x.links) - 1; i >= 0; i-- {
 		x.links[i].Decrypt(p, p, 0)
+	}
+}
+
+// encryptUnit is decryptUnit's inverse: the first link first.
+func (x *xtsChain) encryptUnit(p []byte) {
+	for _, l := range x.links {
+		l.Encrypt(p, p, 0)
+	}
+}
+
+// encryptSectors is decryptSectors' inverse: the first link first.
+func (x *xtsChain) encryptSectors(p []byte, first uint64) {
+	for _, l := range x.links {
+		l.EncryptSectors(p, p, sectorSize, first)
 	}
 }
