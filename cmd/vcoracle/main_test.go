@@ -87,13 +87,11 @@ func TestCheckJudgesAESArgon2id(t *testing.T) {
 
 func TestCheckStatuses(t *testing.T) {
 	pass := []byte("a-passphrase-long-enough")
-	// Streebog with nobody able to derive: the stated gap.
-	if v := check(aesOnly(), t.TempDir(), pass, chainIndex(t, veracrypt.AES), kdf{veracrypt.Streebog, "Streebog-512"}); v.status != "UNJUDGED" {
-		t.Fatal(v)
-	}
-	// SHA-512 that nobody can judge is the writer's problem.
-	if v := check(aesOnly(), t.TempDir(), pass, chainIndex(t, veracrypt.AES), kdf{veracrypt.SHA512, "SHA-512"}); v.status != "FAIL" {
-		t.Fatal(v)
+	// A derive error is a FAIL whatever the KDF: no exemption hides it.
+	for _, k := range []kdf{{veracrypt.Streebog, "Streebog-512"}, {veracrypt.SHA512, "SHA-512"}} {
+		if v := check(aesOnly(), t.TempDir(), pass, chainIndex(t, veracrypt.AES), k); v.status != "FAIL" || !strings.Contains(v.detail, "derive") {
+			t.Fatal(v)
+		}
 	}
 	// Create refuses: a bad directory.
 	if v := check(aesOnly(), "/nonexistent-dir", pass, 0, kdf{veracrypt.Argon2id, ""}); v.status != "FAIL" {
@@ -130,12 +128,6 @@ func TestXTSChainOrder(t *testing.T) {
 	}
 	boom := tools{xts: func(string, []byte, []byte, []byte, bool) ([]byte, error) { return nil, errors.New("boom") }}
 	if _, err := xtsChain(boom, links, key, nil, nil, true); err == nil {
-		t.Fatal("failure lost")
-	}
-	if _, err := dumpChain(tl, links, make([]byte, 64), nil, nil); err == nil {
-		t.Fatal("short volume key accepted")
-	}
-	if _, err := dumpChain(boom, links, make([]byte, 192), nil, nil); err == nil {
 		t.Fatal("failure lost")
 	}
 }

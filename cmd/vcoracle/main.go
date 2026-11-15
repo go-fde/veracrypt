@@ -88,7 +88,7 @@ type kdf struct {
 var kdfs = []kdf{
 	{veracrypt.SHA512, "SHA-512"},
 	{veracrypt.SHA256, "SHA-256"},
-	{veracrypt.BLAKE2s, "BLAKE2s"}, // Botan has BLAKE2b only: cryptsetup judges it
+	{veracrypt.BLAKE2s, "BLAKE2s"},
 	{veracrypt.Whirlpool, "Whirlpool"},
 	{veracrypt.Streebog, "Streebog-512"},
 	{veracrypt.Argon2id, ""},
@@ -142,7 +142,7 @@ type botan struct {
 }
 
 func loadBotan(path string) (*botan, error) {
-	h, err := purego.Dlopen(path, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+	h, err := purego.Dlopen(path, purego.RTLD_NOW)
 	if err != nil {
 		return nil, fmt.Errorf("load %s: %w", path, err)
 	}
@@ -169,9 +169,9 @@ func (b *botan) derive(k kdf, pass, salt []byte) ([]byte, error) {
 	out := make([]byte, 192)
 	var rc int32
 	if k.name == veracrypt.Argon2id {
-		rc = b.pwdhash("Argon2id", 1024*(64+(pim-1)*32), (pim-1)/3+3, 1, &out[0], 192, ptr(pass), uintptr(len(pass)), ptr(salt), uintptr(len(salt)))
+		rc = b.pwdhash("Argon2id", 1024*(64+(pim-1)*32), (pim-1)/3+3, 1, ptr(out), 192, ptr(pass), uintptr(len(pass)), ptr(salt), uintptr(len(salt)))
 	} else {
-		rc = b.pwdhash("PBKDF2("+k.botan+")", 15000+1000*pim, 0, 0, &out[0], 192, ptr(pass), uintptr(len(pass)), ptr(salt), uintptr(len(salt)))
+		rc = b.pwdhash("PBKDF2("+k.botan+")", 15000+1000*pim, 0, 0, ptr(out), 192, ptr(pass), uintptr(len(pass)), ptr(salt), uintptr(len(salt)))
 	}
 	if rc != 0 {
 		return nil, fmt.Errorf("botan_pwdhash(%s): %d", k.name, rc)
@@ -197,7 +197,7 @@ func (b *botan) xts(cipher string, key, nonce, data []byte, decrypt bool) ([]byt
 	}
 	out := make([]byte, len(data))
 	var written, consumed uintptr
-	if rc := b.update(c, 1, &out[0], uintptr(len(out)), &written, &data[0], uintptr(len(data)), &consumed); rc != 0 || int(written) != len(data) {
+	if rc := b.update(c, 1, ptr(out), uintptr(len(out)), &written, ptr(data), uintptr(len(data)), &consumed); rc != 0 || int(written) != len(data) {
 		return nil, fmt.Errorf("botan_cipher_update: %d (%d bytes)", rc, written)
 	}
 	return out, nil
@@ -225,7 +225,7 @@ func parseDump(s string) (chain string, mk []byte, payload uint64, err error) {
 	}
 	mk, err = hex.DecodeString(strings.Join(strings.Fields(hexes.String()), ""))
 	if err != nil || chain == "" || len(mk) == 0 || payload == 0 {
-		return "", nil, 0, fmt.Errorf("no chain, payload offset or master key in %q", s)
+		return "", nil, 0, errors.New("no chain, payload offset or volume key in cryptsetup's output (not quoted: it holds the key)")
 	}
 	return chain, mk, payload, nil
 }
@@ -314,31 +314,50 @@ func check(t tools, dir string, pass []byte, ci int, k kdf) verdict {
 	}
 
 	// Botan, end to end.
+	// Botan, end to end: every derive or decrypt error is a FAIL. The primary
+	// header and the backup header (a new salt, the same master keys).
 	var master []byte
-	used := []string{}
-	hk, derr := t.derive(k, pass, raw[:64])
-	if derr == nil {
-		master, err = openHeader(t, c.links, hk, raw[64:512], size)
+	for i, off := range []int{0, size - dataOff} {
+		hk, err := t.derive(k, pass, raw[off:off+64])
+		if err != nil {
+			return fail("botan cannot derive the header key: %v", err)
+		}
+		m, err := openHeader(t, c.links, hk, raw[off+64:off+512], size)
 		clear(hk)
 		if err != nil {
-			return fail("header: %v", err)
+			return fail("header at %d: %v", off, err)
 		}
-		for _, s := range sectors {
-			off := dataOff + s*sectorSize
-			got, err := xtsChain(t, c.links, master, raw[off:off+sectorSize], nonce(uint64(off/sectorSize)), true)
-			if err != nil {
-				return fail("%v", err)
-			}
-			if !bytes.Equal(got, plaintext(s)) {
-				return fail("sector %d decrypts to something else", s)
-			}
+		if i == 0 {
+			master = m
+		} else if !bytes.Equal(master, m) {
+			return fail("the backup header holds other master keys")
 		}
-		used = append(used, "Botan: header and 5 sectors")
 	}
+	if bytes.Equal(raw[:64], raw[size-dataOff:size-dataOff+64]) {
+		return fail("primary and backup headers share a salt")
+	}
+	for _, s := range sectors {
+		off := dataOff + s*sectorSize
+		got, err := xtsChain(t, c.links, master, raw[off:off+sectorSize], nonce(uint64(off/sectorSize)), true)
+		if err != nil {
+			return fail("%v", err)
+		}
+		if !bytes.Equal(got, plaintext(s)) {
+			return fail("sector %d decrypts to something else", s)
+		}
+	}
+	used := "Botan: both headers and 5 sectors"
 
-	// cryptsetup, where it can.
-	out, derr2 := t.dump(path)
-	if derr2 == nil {
+	// cryptsetup, where it can: the combinations its OpenSSL-3 backend or
+	// tcrypt table lacks (Kuznyechik, Streebog, Argon2id) may be refused.
+	out, derr := t.dump(path)
+	gap := k.name == veracrypt.Streebog || k.name == veracrypt.Argon2id || strings.Contains(string(c.name), "kuznyechik")
+	switch {
+	case derr != nil && gap:
+		used += "; cryptsetup cannot open this kind"
+	case derr != nil:
+		return fail("cryptsetup refuses the volume: %s", lastLine(out))
+	default:
 		chain, mk, payload, err := parseDump(out)
 		if err != nil {
 			return fail("%v", err)
@@ -346,59 +365,19 @@ func check(t tools, dir string, pass []byte, ci int, k kdf) verdict {
 		if chain != string(c.name) || payload != dataOff/sectorSize || len(mk) != 64*len(c.links) {
 			return fail("cryptsetup reports chain %s, payload offset %d, %d key bytes", chain, payload, len(mk))
 		}
-		if master == nil { // Botan could not derive: judge the data with cryptsetup's key
-			for _, s := range sectors {
-				off := dataOff + s*sectorSize
-				got, err := dumpChain(t, c.links, mk, raw[off:off+sectorSize], nonce(uint64(off/sectorSize)))
-				if err != nil {
-					return fail("%v", err)
-				}
-				if !bytes.Equal(got, plaintext(s)) {
-					return fail("sector %d decrypts to something else (cryptsetup's key)", s)
-				}
+		// cryptsetup's key blocks must be the ones the transcribed offsets
+		// cut out of the master keys Botan found.
+		for i, l := range c.links {
+			want := append(append([]byte{}, master[l.keyOff:l.keyOff+32]...), master[l.tweakOff:l.tweakOff+32]...)
+			if !bytes.Equal(mk[64*i:64*i+64], want) {
+				return fail("cryptsetup's key block %d differs from the master key Botan found", i)
 			}
-			used = append(used, "cryptsetup: 5 sectors")
-		} else {
-			// Both opened it: cryptsetup's key blocks must be the ones the
-			// transcribed offsets cut out of the master keys Botan found.
-			for i, l := range c.links {
-				want := append(append([]byte{}, master[l.keyOff:l.keyOff+32]...), master[l.tweakOff:l.tweakOff+32]...)
-				if !bytes.Equal(mk[64*i:64*i+64], want) {
-					return fail("cryptsetup's key block %d differs from the master key Botan found", i)
-				}
-			}
-			used = append(used, "cryptsetup: same chain, offset and keys")
 		}
+		clear(mk)
+		used += "; cryptsetup: same chain, offset and keys"
 	}
-	if len(used) == 0 {
-		// Not judged by either. Only the stated gap may land here.
-		if k.name == veracrypt.Streebog || k.name == veracrypt.Argon2id || strings.Contains(string(c.name), "kuznyechik") {
-			return verdict{name, "UNJUDGED", fmt.Sprintf("botan: %v; cryptsetup: %s", derr, lastLine(out))}
-		}
-		return fail("nobody judged it: botan: %v; cryptsetup: %s", derr, lastLine(out))
-	}
-	if derr != nil && k.name != veracrypt.BLAKE2s && k.name != veracrypt.Argon2id {
-		return fail("botan cannot derive the header key: %v", derr)
-	}
-	if derr2 != nil && !(k.name == veracrypt.Streebog || k.name == veracrypt.Argon2id || strings.Contains(string(c.name), "kuznyechik")) {
-		return fail("cryptsetup refuses the volume: %s", lastLine(out))
-	}
-	return verdict{name, "OK", strings.Join(used, "; ")}
-}
-
-// dumpChain decrypts with cryptsetup's per-link 64-byte key blocks.
-func dumpChain(t tools, links []link, mk, data, nonce []byte) ([]byte, error) {
-	p := data
-	for i := len(links) - 1; i >= 0; i-- {
-		if 64*(i+1) > len(mk) {
-			return nil, fmt.Errorf("volume key of %d bytes too short", len(mk))
-		}
-		var err error
-		if p, err = t.xts(links[i].botan, mk[64*i:64*i+64], nonce, p, true); err != nil {
-			return nil, err
-		}
-	}
-	return p, nil
+	clear(master)
+	return verdict{name, "OK", used}
 }
 
 // openHeader decrypts the 448 header bytes with the header key hk and checks
