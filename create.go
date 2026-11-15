@@ -208,25 +208,29 @@ func Create(w ReadWriterAt, size int64, password []byte, o CreateOptions) (*Volu
 
 	// The two headers differ in salt only, so in their derived key: derive
 	// them side by side.
+	// The salts are drawn here, one after the other: the entropy source need
+	// not be safe for concurrent use.
 	var hdrs [2][]byte
-	var errs [2]error
+	for i := range hdrs {
+		hdrs[i] = make([]byte, headerSize)
+		if _, err := io.ReadFull(entropy, hdrs[i][:saltLen]); err != nil {
+			clear(h.keys[:])
+			return nil, fmt.Errorf("veracrypt: random: %w", err)
+		}
+	}
 	var wg sync.WaitGroup
 	for i := range hdrs {
 		if v.kdf == Argon2id { // 416 MiB to 1 GiB each: one at a time
-			hdrs[i], errs[i] = sealHeader(h, c, v, pool, o.PIM)
+			sealHeader(h, c, v, pool, o.PIM, hdrs[i])
 			continue
 		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			hdrs[i], errs[i] = sealHeader(h, c, v, pool, o.PIM)
+			sealHeader(h, c, v, pool, o.PIM, hdrs[i])
 		}()
 	}
 	wg.Wait()
-	if err := errors.Join(errs[0], errs[1]); err != nil {
-		clear(h.keys[:])
-		return nil, err
-	}
 
 	// Everything but the headers first, the headers last: a half-written
 	// container never shows a header over a data area that is not there.
@@ -308,12 +312,8 @@ func generateKeys(keys *[256]byte, c chain) error {
 // of Spec offsets 64-255 with their CRC-32s, the master keys, and the 448
 // bytes after the salt encrypted under the header key as one XTS data unit
 // (Volumes.c: header key = PBKDF(password, salt), XTS data unit 0).
-func sealHeader(h *Header, c chain, v kdfVariant, pool []byte, pim int) ([]byte, error) {
-	out := make([]byte, headerSize)
+func sealHeader(h *Header, c chain, v kdfVariant, pool []byte, pim int, out []byte) {
 	salt, d := out[:saltLen], out[saltLen:]
-	if _, err := io.ReadFull(entropy, salt); err != nil {
-		return nil, fmt.Errorf("veracrypt: random: %w", err)
-	}
 	copy(d, "VERA")
 	binary.BigEndian.PutUint16(d[4:], h.Version)
 	binary.BigEndian.PutUint16(d[6:], h.MinVersion)
@@ -330,7 +330,6 @@ func sealHeader(h *Header, c chain, v kdfVariant, pool []byte, pim int) ([]byte,
 	x := newXTSChain(c, key)
 	clear(key)
 	x.encryptUnit(d)
-	return out, nil
 }
 
 // fillRandom writes n random bytes at off in 1 MiB pieces.

@@ -125,6 +125,12 @@ func TestCreateRoundTripMatrix(t *testing.T) {
 	kdfs := []KDF{SHA512, SHA256, BLAKE2s, Whirlpool, Streebog, Argon2id}
 	for _, c := range chains {
 		for _, k := range kdfs {
+			// Every cipher with SHA-512, every KDF with AES and with the
+			// three-cipher cascade: the full 15 x 6 product timed out under
+			// -race (20 min), and the KDF and the cipher never meet.
+			if k != SHA512 && c.name != AES && c.name != SerpentTwofishAES {
+				continue
+			}
 			t.Run(fmt.Sprintf("%s/%s", c.name, k), func(t *testing.T) {
 				st := newStore(testSize)
 				o := CreateOptions{Cipher: c.name, KDF: k, PIM: 1}
