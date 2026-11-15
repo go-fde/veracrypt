@@ -25,8 +25,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/go-fde/veracrypt"
@@ -145,7 +148,7 @@ func cryptsetupGap(c veracrypt.Cipher, k veracrypt.KDF) bool {
 	return k == veracrypt.Streebog || k == veracrypt.Argon2id || strings.Contains(string(c), "kuznyechik")
 }
 
-func (g guest) check(c veracrypt.Cipher, k veracrypt.KDF) (failed bool) {
+func (g guest) check(c veracrypt.Cipher, k veracrypt.KDF) bool {
 	name := fmt.Sprintf("%s/%s", c, k)
 	vol := filepath.Join(g.dir, fmt.Sprintf("%s.%s.hc", c, k))
 	os.Remove(vol)
@@ -179,7 +182,7 @@ func (g guest) check(c veracrypt.Cipher, k veracrypt.KDF) (failed bool) {
 		bad = true
 	case cryptsetupOK:
 		res = append(res, fmt.Sprintf("cryptsetup: %d sectors equal", len(want)/sectorSize))
-	case cryptsetupGap(c, k) && strings.HasPrefix(why, "refused"):
+	case cryptsetupGap(c, k) && strings.Contains(why, "No device header detected"):
 		res = append(res, "cryptsetup "+why)
 	default:
 		res = append(res, "cryptsetup FAILED, not a known gap: "+why)
@@ -209,12 +212,9 @@ func (g guest) check(c veracrypt.Cipher, k veracrypt.KDF) (failed bool) {
 		// Second pass, part one: VeraCrypt's virtual device gets a filesystem.
 		if !bad {
 			for _, fs := range g.filesystems(k) {
-				if r, ok := g.filesystem(vol, mp, dev, fs, cryptsetupOK); ok {
-					res = append(res, r)
-				} else {
-					res = append(res, r)
-					bad = true
-				}
+				r, ok := g.filesystem(vol, mp, dev, fs, cryptsetupOK)
+				res = append(res, r)
+				bad = bad || !ok
 				// the volume was dismounted by filesystem(); mount it bare again
 				if out, err := g.vcMount(vol, mp, "none", false); err != nil {
 					res = append(res, "veracrypt: remount: "+lastLine(out))
@@ -344,16 +344,48 @@ func (h host) exec(stdin string, args ...string) error {
 	return cmd.Run()
 }
 
+// checkPassphraseFile enforces what the help text says: at least 20 bytes
+// (VeraCrypt refuses a low PIM with a shorter one) and no newline (Create
+// would take it as part of the passphrase, the mounting tools would not).
+func checkPassphraseFile(path string) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	defer clear(b)
+	if len(b) < 20 || bytes.ContainsAny(b, "\r\n") {
+		return errors.New("the passphrase file must hold at least 20 bytes and no newline")
+	}
+	return nil
+}
+
 func (h host) runHost() error {
 	if h.exec("", "true") == nil {
 		return errors.New("the VM is already running (another session's?): stop it first")
+	}
+	if err := checkPassphraseFile(h.passFile); err != nil {
+		return err
 	}
 	run := exec.Command("tart", "run", "--no-graphics", h.vm)
 	if err := run.Start(); err != nil {
 		return err
 	}
-	// tart stop first, so the guest shuts down cleanly; kill only after.
-	defer func() { exec.Command("tart", "stop", h.vm).Run(); run.Process.Kill(); run.Wait() }()
+	// Whatever happens, including SIGINT and SIGTERM: delete the passphrase
+	// and the volumes in the VM, then tart stop (so the guest shuts down
+	// cleanly), and only then kill the tart process.
+	var once sync.Once
+	cleanup := func() {
+		once.Do(func() {
+			h.exec("", "sh", "-c", "rm -f /dev/shm/vcmount-pw; sudo rm -rf ~/vcmount/out")
+			exec.Command("tart", "stop", h.vm).Run()
+			run.Process.Kill()
+			run.Wait()
+		})
+	}
+	defer cleanup()
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	go func() { <-sig; cleanup(); osExit(130) }()
 	deadline := time.Now().Add(3 * time.Minute)
 	for h.exec("", "true") != nil {
 		if time.Now().After(deadline) {
@@ -361,12 +393,10 @@ func (h host) runHost() error {
 		}
 		time.Sleep(3 * time.Second)
 	}
-	// Always delete the passphrase in the VM, whatever happens.
-	defer h.exec("", "sh", "-c", "rm -f /dev/shm/vcmount-pw; sudo rm -rf ~/vcmount/out")
 	steps := [][]string{
 		{"sh", "-c", "mkdir -p ~/vcmount && cd ~/vcmount && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q libfuse2t64 gnupg curl cryptsetup e2fsprogs dosfstools >/dev/null"},
 		{"sh", "-c", "cd ~/vcmount && deb=veracrypt-console-" + vcVersion + "-Ubuntu-24.04-arm64.deb && [ -f $deb ] || (curl -fsSLO " + vcBase + "/$deb && curl -fsSLO " + vcBase + "/$deb.sig && curl -fsSLO " + vcBase + "/veracrypt-" + vcVersion + "-sha256sum.txt && curl -fsSLO https://amcrypto.jp/VeraCrypt/VeraCrypt_PGP_public_key.asc)"},
-		{"sh", "-c", "cd ~/vcmount && deb=veracrypt-console-" + vcVersion + "-Ubuntu-24.04-arm64.deb && sha256sum --ignore-missing -c veracrypt-" + vcVersion + "-sha256sum.txt 2>/dev/null && export GNUPGHOME=$PWD/gnupg && mkdir -p -m 700 $GNUPGHOME && gpg -q --import VeraCrypt_PGP_public_key.asc 2>/dev/null && gpg --status-fd 1 --verify $deb.sig $deb 2>/dev/null | grep -q '^\\[GNUPG:\\] VALIDSIG " + vcFingerprint + " ' && sudo apt-get install -y -q ./$deb >/dev/null && veracrypt --version"},
+		{"sh", "-c", "cd ~/vcmount && deb=veracrypt-console-" + vcVersion + "-Ubuntu-24.04-arm64.deb && sha256sum --ignore-missing -c veracrypt-" + vcVersion + "-sha256sum.txt 2>/dev/null && export GNUPGHOME=$PWD/gnupg && mkdir -p -m 700 $GNUPGHOME && gpg -q --import VeraCrypt_PGP_public_key.asc 2>/dev/null && { gpg --status-fd 1 --verify $deb.sig $deb > st 2>/dev/null; true; } && grep -q '^\\[GNUPG:\\] GOODSIG ' st && grep -q '^\\[GNUPG:\\] VALIDSIG " + vcFingerprint + " ' st && ! grep -q '^\\[GNUPG:\\] \\(EXPKEYSIG\\|REVKEYSIG\\|EXPSIG\\|BADSIG\\) ' st && sudo apt-get install -y -q ./$deb >/dev/null && veracrypt --version"},
 	}
 	for _, s := range steps {
 		if err := h.exec("", s...); err != nil {
@@ -379,7 +409,7 @@ func (h host) runHost() error {
 	if err := h.exec(h.passFile, "sh", "-c", "umask 077; cat > /dev/shm/vcmount-pw"); err != nil { // tmpfs: never on the VM's disk
 		return err
 	}
-	return h.exec("", "sh", "-c", "cd ~/vcmount && VCMOUNT=1 sudo -E ./vcmount guest --dir $PWD/out --passfile /dev/shm/vcmount-pw")
+	return h.exec("", "sh", "-c", "cd ~/vcmount && sudo VCMOUNT=1 ./vcmount guest --dir $PWD/out --passfile /dev/shm/vcmount-pw")
 }
 
 // ----------------------------------------------------------------- main
