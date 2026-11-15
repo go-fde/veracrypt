@@ -46,6 +46,30 @@ func TestShReadsStdinFromFile(t *testing.T) {
 	}
 }
 
+func TestCheckPassphraseFile(t *testing.T) {
+	dir := t.TempDir()
+	for body, ok := range map[string]bool{"short": false, "a-passphrase-with-newline-ok\n": false, "a-passphrase-long-enough-ok": true} {
+		f := filepath.Join(dir, "p")
+		os.WriteFile(f, []byte(body), 0o600)
+		if err := checkPassphraseFile(f); (err == nil) != ok {
+			t.Errorf("%q: %v", body, err)
+		}
+	}
+	if checkPassphraseFile(filepath.Join(dir, "missing")) == nil {
+		t.Fatal("missing file accepted")
+	}
+}
+
+// Only the stated gap may be refused by cryptsetup.
+func TestCryptsetupGap(t *testing.T) {
+	if !cryptsetupGap("kuznyechik-camellia", "sha512") || !cryptsetupGap("aes", "stribog512") || !cryptsetupGap("aes", "argon2id") {
+		t.Fatal("known gap not recognised")
+	}
+	if cryptsetupGap("aes", "sha512") || cryptsetupGap("serpent-twofish-aes", "whirlpool") {
+		t.Fatal("a supported combination counted as a gap")
+	}
+}
+
 func TestGateAndRoot(t *testing.T) {
 	t.Setenv("VCMOUNT", "")
 	for _, args := range [][]string{
