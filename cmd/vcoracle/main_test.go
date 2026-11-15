@@ -2,10 +2,18 @@ package main
 
 import (
 	"bytes"
+	"crypto/aes"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/go-fde/veracrypt"
+	"github.com/spf13/cobra"
+	"golang.org/x/crypto/argon2"
+	"golang.org/x/crypto/xts"
 )
 
 const dump = "TCRYPT header information for x.hc\nCipher chain:  \taes\nCipher mode:   \txts-plain64\nPayload offset:\t256\nMK bits:       \t512\nMK dump:\t51 26 df 37 \n\t59 8e 57 6c \n"
@@ -28,54 +36,154 @@ func TestNonce(t *testing.T) {
 	}
 }
 
-// The last link of a cascade is decrypted first, with its own key slices.
-func TestDecryptOrder(t *testing.T) {
-	mk := make([]byte, 192)
-	for i := range mk {
-		mk[i] = byte(i)
-	}
-	var calls []string
-	tl := tools{botan: func(c string, key, n, data []byte) ([]byte, error) {
-		calls = append(calls, fmt.Sprintf("%s:%d,%d", c, key[0], key[32]))
-		return data, nil
-	}}
-	// serpent-twofish-aes: serpent 0/96, twofish 32/128, aes 64/160.
-	if _, err := decrypt(tl, chains[4].links, mk, make([]byte, 512), 256); err != nil {
-		t.Fatal(err)
-	}
-	if got := strings.Join(calls, " "); got != "AES-256/XTS:128,160 Twofish/XTS:64,96 Serpent/XTS:0,32" {
-		t.Fatal(got)
-	}
-	if _, err := decrypt(tl, chains[4].links, mk[:100], nil, 0); err == nil {
-		t.Fatal("short key accepted")
-	}
-	boom := tools{botan: func(string, []byte, []byte, []byte) ([]byte, error) { return nil, errors.New("boom") }}
-	if _, err := decrypt(boom, chains[0].links, mk, nil, 0); err == nil {
-		t.Fatal("botan failure lost")
+// aesOnly is a stand-in for Botan built on golang.org/x/crypto, which has
+// AES-XTS and Argon2id and is not this repository's code.
+func aesOnly() tools {
+	return tools{
+		dump: func(string) (string, error) {
+			return "No device header detected with this passphrase.\n", errors.New("exit 2")
+		},
+		derive: func(k kdf, pass, salt []byte) ([]byte, error) {
+			if k.name != veracrypt.Argon2id {
+				return nil, errors.New("not in the stand-in")
+			}
+			return argon2.IDKey(pass, salt, 3, 64*1024, 1, 192), nil
+		},
+		xts: func(c string, key, n, data []byte, decrypt bool) ([]byte, error) {
+			if c != "AES-256/XTS" {
+				return nil, errors.New("not in the stand-in")
+			}
+			x, err := xts.NewCipher(aes.NewCipher, key)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]byte, len(data))
+			if decrypt {
+				x.Decrypt(out, data, binary.LittleEndian.Uint64(n))
+			} else {
+				x.Encrypt(out, data, binary.LittleEndian.Uint64(n))
+			}
+			return out, nil
+		},
 	}
 }
 
-func TestRunReportsUnjudged(t *testing.T) {
-	tl := tools{dump: func(string) (string, error) {
-		return "x\nNo device header detected with this passphrase.\n", errors.New("exit 2")
-	}}
-	var out bytes.Buffer
-	// Only Kuznyechik chains and Streebog are unjudged; every other refusal
-	// by cryptsetup is a failure, so the run must not pass.
-	if err := run(tl, t.TempDir(), []byte("a-passphrase-long-enough"), &out); err == nil {
-		t.Fatal("a run in which cryptsetup opens nothing passed")
+func chainIndex(t *testing.T, c veracrypt.Cipher) int {
+	for i := range chains {
+		if chains[i].name == c {
+			return i
+		}
 	}
-	if !strings.Contains(out.String(), "ok 0, unjudged 35, failed 40") || !strings.Contains(out.String(), "No device header detected") {
+	t.Fatal("no chain", c)
+	return 0
+}
+
+func TestCheckJudgesAESArgon2id(t *testing.T) {
+	v := check(aesOnly(), t.TempDir(), []byte("a-passphrase-long-enough"), chainIndex(t, veracrypt.AES), kdf{veracrypt.Argon2id, ""})
+	if v.status != "OK" || !strings.Contains(v.detail, "Botan") {
+		t.Fatal(v)
+	}
+}
+
+func TestCheckStatuses(t *testing.T) {
+	pass := []byte("a-passphrase-long-enough")
+	// A derive error is a FAIL whatever the KDF: no exemption hides it.
+	for _, k := range []kdf{{veracrypt.Streebog, "Streebog-512"}, {veracrypt.SHA512, "SHA-512"}} {
+		if v := check(aesOnly(), t.TempDir(), pass, chainIndex(t, veracrypt.AES), k); v.status != "FAIL" || !strings.Contains(v.detail, "derive") {
+			t.Fatal(v)
+		}
+	}
+	// Create refuses: a bad directory.
+	if v := check(aesOnly(), "/nonexistent-dir", pass, 0, kdf{veracrypt.Argon2id, ""}); v.status != "FAIL" {
+		t.Fatal(v)
+	}
+}
+
+// The last link of a cascade is decrypted first, the first encrypted first,
+// each keyed by its own offsets.
+func TestXTSChainOrder(t *testing.T) {
+	key := make([]byte, 256)
+	for i := range key {
+		key[i] = byte(i)
+	}
+	var calls []string
+	tl := tools{xts: func(c string, k, n, data []byte, d bool) ([]byte, error) {
+		calls = append(calls, fmt.Sprintf("%s:%d,%d", c, k[0], k[32]))
+		return data, nil
+	}}
+	links := chains[chainIndex(t, veracrypt.SerpentTwofishAES)].links
+	if _, err := xtsChain(tl, links, key, make([]byte, 512), nonce(0), true); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(calls, " "); got != "AES-256/XTS:64,160 Twofish/XTS:32,128 Serpent/XTS:0,96" {
+		t.Fatal(got)
+	}
+	calls = nil
+	xtsChain(tl, links, key, make([]byte, 512), nonce(0), false)
+	if got := strings.Join(calls, " "); got != "Serpent/XTS:0,96 Twofish/XTS:32,128 AES-256/XTS:64,160" {
+		t.Fatal(got)
+	}
+	if _, err := xtsChain(tl, links, key[:100], nil, nil, true); err == nil {
+		t.Fatal("short key accepted")
+	}
+	boom := tools{xts: func(string, []byte, []byte, []byte, bool) ([]byte, error) { return nil, errors.New("boom") }}
+	if _, err := xtsChain(boom, links, key, nil, nil, true); err == nil {
+		t.Fatal("failure lost")
+	}
+}
+
+func TestRunFailsWhenNothingIsJudged(t *testing.T) {
+	tl := aesOnly()
+	tl.derive = func(kdf, []byte, []byte) ([]byte, error) { return nil, errors.New("no") }
+	var out bytes.Buffer
+	if err := run(tl, t.TempDir(), []byte("a-passphrase-long-enough"), &out); err == nil {
+		t.Fatal("a run in which nobody judged anything passed")
+	}
+	if !strings.Contains(out.String(), "failed") {
 		t.Fatal(out.String())
 	}
 }
 
 func TestRootRefusesWithoutEnv(t *testing.T) {
 	t.Setenv("VCORACLE", "")
-	cmd := RootCmd()
+	var cmd *cobra.Command = RootCmd()
 	cmd.SetArgs([]string{"--dir", t.TempDir(), "--passfile", "/nonexistent"})
 	cmd.SetErr(&bytes.Buffer{})
 	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "VCORACLE=1") {
 		t.Fatal(err)
+	}
+}
+
+// Negative control: a header key that is not the volume's, and a header that
+// was altered after sealing, are refused.
+func TestOpenHeaderRefuses(t *testing.T) {
+	tl := aesOnly()
+	dir := t.TempDir()
+	pass := []byte("a-passphrase-long-enough")
+	v, err := veracrypt.CreateFile(dir+"/v.hc", 1<<20, pass, veracrypt.CreateOptions{KDF: veracrypt.Argon2id, PIM: pim})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.Close()
+	raw, _ := os.ReadFile(dir + "/v.hc")
+	k := kdf{veracrypt.Argon2id, ""}
+	hk, _ := tl.derive(k, pass, raw[:64])
+	if _, err := openHeader(tl, chains[0].links, hk, raw[64:512], 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	bad, _ := tl.derive(k, []byte("another-passphrase-long-enough"), raw[:64])
+	if _, err := openHeader(tl, chains[0].links, bad, raw[64:512], 1<<20); err == nil {
+		t.Fatal("wrong key opened the header")
+	}
+	if _, err := openHeader(tl, chains[0].links, hk, raw[64:512], 2<<20); err == nil {
+		t.Fatal("wrong size accepted")
+	}
+	flipped := append([]byte{}, raw[64:512]...)
+	flipped[300] ^= 1
+	if _, err := openHeader(tl, chains[0].links, hk, flipped, 1<<20); err == nil {
+		t.Fatal("altered header accepted")
+	}
+	if _, err := openHeader(tl, chains[0].links, hk[:10], raw[64:512], 1<<20); err == nil {
+		t.Fatal("short key accepted")
 	}
 }
