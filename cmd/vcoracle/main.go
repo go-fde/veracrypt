@@ -29,6 +29,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/go-fde/veracrypt"
@@ -120,11 +121,13 @@ func (c config) tools() tools {
 
 // parseDump reads the chain name and the master key from tcryptDump
 // --dump-volume-key's output.
-func parseDump(s string) (chain string, mk []byte, err error) {
+func parseDump(s string) (chain string, mk []byte, payload uint64, err error) {
 	inKey := false
 	var hexes strings.Builder
 	for _, l := range strings.Split(s, "\n") {
 		switch {
+		case strings.HasPrefix(l, "Payload offset:"):
+			payload, _ = strconv.ParseUint(strings.TrimSpace(strings.TrimPrefix(l, "Payload offset:")), 10, 64)
 		case strings.HasPrefix(l, "Cipher chain:"):
 			chain = strings.TrimSpace(strings.TrimPrefix(l, "Cipher chain:"))
 		case strings.HasPrefix(l, "MK dump:"):
@@ -137,10 +140,10 @@ func parseDump(s string) (chain string, mk []byte, err error) {
 		}
 	}
 	mk, err = hex.DecodeString(strings.Join(strings.Fields(hexes.String()), ""))
-	if err != nil || chain == "" || len(mk) == 0 {
-		return "", nil, fmt.Errorf("no chain or master key in %q", s)
+	if err != nil || chain == "" || len(mk) == 0 || payload == 0 {
+		return "", nil, 0, fmt.Errorf("no chain, payload offset or master key in %q", s)
 	}
-	return chain, mk, nil
+	return chain, mk, payload, nil
 }
 
 // nonce is XTS's tweak for a sector: its number on the volume, 16 bytes,
@@ -195,6 +198,9 @@ func check(t tools, dir string, pass []byte, ci int, k veracrypt.KDF) verdict {
 	if err != nil {
 		return verdict{name, "FAIL", "create: " + err.Error()}
 	}
+	if v.Size() != size-2*dataOff {
+		return verdict{name, "FAIL", fmt.Sprintf("data area of %d bytes, want %d", v.Size(), size-2*dataOff)}
+	}
 	last := int(v.Size()/sectorSize) - 1
 	sectors := []int{0, 1, last / 2, last - 1, last}
 	for _, s := range sectors {
@@ -202,21 +208,31 @@ func check(t tools, dir string, pass []byte, ci int, k veracrypt.KDF) verdict {
 			return verdict{name, "FAIL", "write: " + err.Error()}
 		}
 	}
-	v.Close()
+	if err := v.Close(); err != nil {
+		return verdict{name, "FAIL", "close: " + err.Error()}
+	}
 	out, err := t.dump(path)
 	if err != nil {
-		return verdict{name, "UNJUDGED", "cryptsetup cannot unwrap the header: " + strings.TrimSpace(lastLine(out))}
+		reason := "cryptsetup cannot unwrap the header: " + strings.TrimSpace(lastLine(out))
+		// Only the stated gap is UNJUDGED; any other refusal is the writer's.
+		if k == veracrypt.Streebog || strings.Contains(string(c.name), "kuznyechik") {
+			return verdict{name, "UNJUDGED", reason}
+		}
+		return verdict{name, "FAIL", reason}
 	}
-	chain, mk, err := parseDump(out)
+	chain, mk, payload, err := parseDump(out)
 	if err != nil {
 		return verdict{name, "FAIL", err.Error()}
 	}
-	if chain != string(c.name) {
-		return verdict{name, "FAIL", "cryptsetup reports chain " + chain}
+	if chain != string(c.name) || payload != dataOff/sectorSize || len(mk) != 64*len(c.links) {
+		return verdict{name, "FAIL", fmt.Sprintf("cryptsetup reports chain %s, payload offset %d, %d key bytes", chain, payload, len(mk))}
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return verdict{name, "FAIL", err.Error()}
+	}
+	if len(raw) != size {
+		return verdict{name, "FAIL", fmt.Sprintf("file of %d bytes, want %d", len(raw), size)}
 	}
 	for _, s := range sectors {
 		off := dataOff + s*sectorSize

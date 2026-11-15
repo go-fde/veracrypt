@@ -11,12 +11,12 @@ import (
 const dump = "TCRYPT header information for x.hc\nCipher chain:  \taes\nCipher mode:   \txts-plain64\nPayload offset:\t256\nMK bits:       \t512\nMK dump:\t51 26 df 37 \n\t59 8e 57 6c \n"
 
 func TestParseDump(t *testing.T) {
-	chain, mk, err := parseDump(dump)
-	if err != nil || chain != "aes" || !bytes.Equal(mk, []byte{0x51, 0x26, 0xdf, 0x37, 0x59, 0x8e, 0x57, 0x6c}) {
+	chain, mk, payload, err := parseDump(dump)
+	if err != nil || chain != "aes" || payload != 256 || !bytes.Equal(mk, []byte{0x51, 0x26, 0xdf, 0x37, 0x59, 0x8e, 0x57, 0x6c}) {
 		t.Fatal(chain, mk, err)
 	}
 	for _, bad := range []string{"", "Cipher chain: aes\n", "MK dump:\tzz\n"} {
-		if _, _, err := parseDump(bad); err == nil {
+		if _, _, _, err := parseDump(bad); err == nil {
 			t.Errorf("%q accepted", bad)
 		}
 	}
@@ -60,10 +60,12 @@ func TestRunReportsUnjudged(t *testing.T) {
 		return "x\nNo device header detected with this passphrase.\n", errors.New("exit 2")
 	}}
 	var out bytes.Buffer
-	if err := run(tl, t.TempDir(), []byte("a-passphrase-long-enough"), &out); err != nil {
-		t.Fatal(err)
+	// Only Kuznyechik chains and Streebog are unjudged; every other refusal
+	// by cryptsetup is a failure, so the run must not pass.
+	if err := run(tl, t.TempDir(), []byte("a-passphrase-long-enough"), &out); err == nil {
+		t.Fatal("a run in which cryptsetup opens nothing passed")
 	}
-	if !strings.Contains(out.String(), "ok 0, unjudged 75, failed 0") || !strings.Contains(out.String(), "No device header detected") {
+	if !strings.Contains(out.String(), "ok 0, unjudged 35, failed 40") || !strings.Contains(out.String(), "No device header detected") {
 		t.Fatal(out.String())
 	}
 }
