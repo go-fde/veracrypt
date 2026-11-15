@@ -127,12 +127,22 @@ func (g guest) plainViaCryptsetup(vol string) ([]byte, string) {
 	if out, err := sh(g.pass, "cryptsetup", "open", "--type", "tcrypt", "--veracrypt", fmt.Sprintf("--veracrypt-pim=%d", pim), "--readonly", vol, name); err != nil {
 		return nil, "refused: " + lastLine(out)
 	}
-	defer sh("", "cryptsetup", "close", name)
 	b, err := os.ReadFile("/dev/mapper/" + name)
+	if out, cerr := sh("", "cryptsetup", "close", name); cerr != nil {
+		return nil, "close failed (a leftover mapping would poison later volumes): " + lastLine(out)
+	}
 	if err != nil {
 		return nil, "read: " + err.Error()
 	}
 	return b, ""
+}
+
+// cryptsetupGap says whether this cryptsetup (OpenSSL 3, kernel crypto API,
+// tcrypt table of 2.7.0) cannot open the combination: Kuznyechik has no
+// kernel cipher, Streebog no OpenSSL hash, and 2.7.0 has no Argon2id here.
+// Any other refusal is a failure.
+func cryptsetupGap(c veracrypt.Cipher, k veracrypt.KDF) bool {
+	return k == veracrypt.Streebog || k == veracrypt.Argon2id || strings.Contains(string(c), "kuznyechik")
 }
 
 func (g guest) check(c veracrypt.Cipher, k veracrypt.KDF) (failed bool) {
@@ -169,11 +179,15 @@ func (g guest) check(c veracrypt.Cipher, k veracrypt.KDF) (failed bool) {
 		bad = true
 	case cryptsetupOK:
 		res = append(res, fmt.Sprintf("cryptsetup: %d sectors equal", len(want)/sectorSize))
-	default:
+	case cryptsetupGap(c, k) && strings.HasPrefix(why, "refused"):
 		res = append(res, "cryptsetup "+why)
+	default:
+		res = append(res, "cryptsetup FAILED, not a known gap: "+why)
+		bad = true
 	}
 
-	// VeraCrypt: the virtual device it exposes with --filesystem=none.
+	// VeraCrypt: the plaintext of its userspace (FUSE) device, which it
+	// exposes with --filesystem=none at /tmp/.veracrypt_aux_mnt1/volume.
 	mp := filepath.Join(g.dir, "mnt")
 	os.MkdirAll(mp, 0o700)
 	if out, err := g.vcMount(vol, mp, "none", false); err != nil {
@@ -202,7 +216,9 @@ func (g guest) check(c veracrypt.Cipher, k veracrypt.KDF) (failed bool) {
 					bad = true
 				}
 				// the volume was dismounted by filesystem(); mount it bare again
-				if _, err := g.vcMount(vol, mp, "none", false); err != nil {
+				if out, err := g.vcMount(vol, mp, "none", false); err != nil {
+					res = append(res, "veracrypt: remount: "+lastLine(out))
+					bad = true
 					break
 				}
 			}
@@ -249,7 +265,16 @@ func (g guest) filesystem(vol, mp, dev, fs string, cryptsetupOK bool) (string, b
 		return fs + ": write: " + werr.Error(), false
 	}
 	if !cryptsetupOK {
-		return fs + ": written through VeraCrypt", true
+		// Only VeraCrypt can open this volume: it must read its own file back.
+		if out, err := g.vcMount(vol, mp, "", true); err != nil {
+			return fs + ": veracrypt re-mount: " + lastLine(out), false
+		}
+		got, err := os.ReadFile(filepath.Join(mp, "probe.txt"))
+		g.vcUmount(mp)
+		if err != nil || !bytes.Equal(got, content) {
+			return fs + ": file differs on VeraCrypt re-read", false
+		}
+		return fs + ": VeraCrypt wrote and re-read", true
 	}
 	const name = "vcmount-fs"
 	if out, err := sh(g.pass, "cryptsetup", "open", "--type", "tcrypt", "--veracrypt", fmt.Sprintf("--veracrypt-pim=%d", pim), "--readonly", vol, name); err != nil {
@@ -320,11 +345,15 @@ func (h host) exec(stdin string, args ...string) error {
 }
 
 func (h host) runHost() error {
+	if h.exec("", "true") == nil {
+		return errors.New("the VM is already running (another session's?): stop it first")
+	}
 	run := exec.Command("tart", "run", "--no-graphics", h.vm)
 	if err := run.Start(); err != nil {
 		return err
 	}
-	defer func() { run.Process.Kill(); run.Wait(); exec.Command("tart", "stop", h.vm).Run() }()
+	// tart stop first, so the guest shuts down cleanly; kill only after.
+	defer func() { exec.Command("tart", "stop", h.vm).Run(); run.Process.Kill(); run.Wait() }()
 	deadline := time.Now().Add(3 * time.Minute)
 	for h.exec("", "true") != nil {
 		if time.Now().After(deadline) {
@@ -333,11 +362,11 @@ func (h host) runHost() error {
 		time.Sleep(3 * time.Second)
 	}
 	// Always delete the passphrase in the VM, whatever happens.
-	defer h.exec("", "sh", "-c", "rm -f ~/vcmount/pw; sudo rm -rf ~/vcmount/out")
+	defer h.exec("", "sh", "-c", "rm -f /dev/shm/vcmount-pw; sudo rm -rf ~/vcmount/out")
 	steps := [][]string{
 		{"sh", "-c", "mkdir -p ~/vcmount && cd ~/vcmount && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q libfuse2t64 gnupg curl cryptsetup e2fsprogs dosfstools >/dev/null"},
 		{"sh", "-c", "cd ~/vcmount && deb=veracrypt-console-" + vcVersion + "-Ubuntu-24.04-arm64.deb && [ -f $deb ] || (curl -fsSLO " + vcBase + "/$deb && curl -fsSLO " + vcBase + "/$deb.sig && curl -fsSLO " + vcBase + "/veracrypt-" + vcVersion + "-sha256sum.txt && curl -fsSLO https://amcrypto.jp/VeraCrypt/VeraCrypt_PGP_public_key.asc)"},
-		{"sh", "-c", "cd ~/vcmount && deb=veracrypt-console-" + vcVersion + "-Ubuntu-24.04-arm64.deb && sha256sum --ignore-missing -c veracrypt-" + vcVersion + "-sha256sum.txt 2>/dev/null && export GNUPGHOME=$PWD/gnupg && mkdir -p -m 700 $GNUPGHOME && gpg -q --import VeraCrypt_PGP_public_key.asc 2>/dev/null && gpg --status-fd 1 --verify $deb.sig $deb 2>/dev/null | grep -q 'VALIDSIG " + vcFingerprint + "' && sudo apt-get install -y -q ./$deb >/dev/null && veracrypt --version"},
+		{"sh", "-c", "cd ~/vcmount && deb=veracrypt-console-" + vcVersion + "-Ubuntu-24.04-arm64.deb && sha256sum --ignore-missing -c veracrypt-" + vcVersion + "-sha256sum.txt 2>/dev/null && export GNUPGHOME=$PWD/gnupg && mkdir -p -m 700 $GNUPGHOME && gpg -q --import VeraCrypt_PGP_public_key.asc 2>/dev/null && gpg --status-fd 1 --verify $deb.sig $deb 2>/dev/null | grep -q '^\\[GNUPG:\\] VALIDSIG " + vcFingerprint + " ' && sudo apt-get install -y -q ./$deb >/dev/null && veracrypt --version"},
 	}
 	for _, s := range steps {
 		if err := h.exec("", s...); err != nil {
@@ -347,10 +376,10 @@ func (h host) runHost() error {
 	if err := h.exec(h.guestBin, "sh", "-c", "umask 077; cat > ~/vcmount/vcmount && chmod 700 ~/vcmount/vcmount"); err != nil {
 		return err
 	}
-	if err := h.exec(h.passFile, "sh", "-c", "umask 077; cat > ~/vcmount/pw"); err != nil {
+	if err := h.exec(h.passFile, "sh", "-c", "umask 077; cat > /dev/shm/vcmount-pw"); err != nil { // tmpfs: never on the VM's disk
 		return err
 	}
-	return h.exec("", "sh", "-c", "cd ~/vcmount && VCMOUNT=1 sudo -E ./vcmount guest --dir $PWD/out --passfile $PWD/pw")
+	return h.exec("", "sh", "-c", "cd ~/vcmount && VCMOUNT=1 sudo -E ./vcmount guest --dir $PWD/out --passfile /dev/shm/vcmount-pw")
 }
 
 // ----------------------------------------------------------------- main
