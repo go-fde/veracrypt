@@ -1,6 +1,6 @@
 # veracrypt
 
-Read VeraCrypt and TrueCrypt volumes in pure Go.
+Read VeraCrypt and TrueCrypt volumes, and create VeraCrypt volumes, in pure Go.
 
 ```go
 dev, err := veracrypt.Open("volume.hc", veracrypt.Options{
@@ -75,7 +75,100 @@ These are refused with `ErrUnsupported`:
   and a system header opened without `System`;
 - sector sizes other than 512 bytes.
 
-Writing is not implemented: `WriteAt` returns `ErrReadOnly`.
+A `Device` is read-only: `WriteAt` returns `ErrReadOnly`. Volumes are
+written through `Create`, below.
+
+## Creating a volume
+
+```go
+v, err := veracrypt.CreateFile("new.hc", 64<<20, []byte("a long password"),
+	veracrypt.CreateOptions{
+		Cipher: veracrypt.SerpentTwofishAES, // default AES
+		KDF:    veracrypt.SHA512,            // default SHA512
+		PIM:    0,                           // 0: the default cost
+	})
+if err != nil {
+	log.Fatal(err)
+}
+defer v.Close()
+_, err = v.WriteAt(data, 0) // plaintext in, ciphertext on disk
+```
+
+`Create(w, size, password, opts)` does the same on any `ReadWriterAt`
+(`io.ReaderAt` and `io.WriterAt`); `CreateFile` makes a new file with mode
+0600 and refuses an existing one. The `Volume` is a plaintext view of the
+data area: `ReadAt`, `WriteAt` (any offset and length; partial sectors are
+read, merged and re-encrypted) and `Size`. There is no filesystem inside:
+the data area is `size - 262144` bytes of whatever you write.
+
+What `Create` writes, for a container of `S` bytes (the *VeraCrypt Volume
+Format Specification*, header layout table and "Embedded Backup Headers";
+`Volumes.c` `CreateVolumeHeaderInMemory`; `Format.c` `FormatVolume`):
+
+| Offset | Size | |
+|---|---|---|
+| 0 | 512 | primary header: 64-byte random salt, then 448 bytes in XTS under the header key (`VERA`, header version 5, minimum program version 1.11, both CRC-32s, volume size, master key offset 131072, sector size 512, the 256-byte master key area) |
+| 512 | 65,024 | random (reserved) |
+| 65,536 | 65,536 | random: the area of a hidden volume's header. No hidden volume is created, and the area looks as it does on VeraCrypt volumes that have none |
+| 131,072 | `S - 262144` | data area: tweak of its first sector is 256 |
+| `S - 131072` | 512 | backup header: the same master keys under a new salt |
+| `S - 130560` | 65,024 | random (reserved) |
+| `S - 65536` | 65,536 | random: the backup area of a hidden volume's header |
+
+Salts and master keys come from `crypto/rand`, as does the fill. By default
+the data area is filled with random bytes, like VeraCrypt's full format
+(which encrypts random data under throw-away keys; random bytes are
+indistinguishable from that and cost no cipher time). `CreateOptions.Quick`
+skips the fill, like VeraCrypt's `--quick`: the data area stays as the
+writer has it, a sparse file of zeros for a new file, whose ciphertext
+decrypts to noise but is distinguishable from a filled volume.
+
+Options: every cipher and cascade the reader opens; the KDFs PBKDF2 with
+SHA-512, SHA-256, BLAKE2s-256, Whirlpool or Streebog-512 (not RIPEMD-160,
+which VeraCrypt 1.26 no longer offers: its volumes only cryptsetup reads), and
+Argon2id; PIM up to `MaxPIM` (100,000); keyfiles (`Keyfiles`, as in
+`Options`). The size is a multiple of 512 from `MinSize` (299,008,
+VeraCrypt's `TC_MIN_VOLUME_SIZE`) to `MaxSize` (1 PiB, `TC_MAX_VOLUME_SIZE`).
+A store with a `Truncate` method (an `*os.File`) is cut to `size` first; any
+other store must be empty or exactly `size` long, so that the backup header
+lies at its end. The backup header is written before the primary one. Every refusal wraps `ErrOption` and nothing is written.
+Not created: hidden volumes, system encryption, TrueCrypt volumes,
+filesystems. A FAT or exFAT writer on top of `Volume` is a follow-up.
+
+Key material is zeroed where Go allows it: the password pool and the header
+keys right after use, the master keys on `Close` (after which reads and
+writes fail with `ErrClosed`). The cipher schedules inside the cipher
+libraries cannot be zeroed. A weak XTS key (equal data and tweak keys) is
+refused.
+
+### Created volumes, opened by other programs
+
+- **Our reader:** `TestCreateRoundTripMatrix` creates and reopens every one
+  of the 15 chains with each of the 6 KDFs (PIM 1), through the primary and
+  through the backup header, and reads back what was written.
+- **cryptsetup 2.7.0** (Linux, no root): `cryptsetup tcryptDump --veracrypt`,
+  passphrase on standard input, reads the header of 40 combinations (10
+  chains with PBKDF2 SHA-512, SHA-256, BLAKE2s, Whirlpool) and
+  reports the version (5), the sector size (512), the MK offset (131072),
+  the hash, the cipher chain, the mode (`xts-plain64`) and the key size we
+  wrote; `--tcrypt-backup` reads the backup header; `--tcrypt-hidden` finds
+  no hidden volume. Its OpenSSL backend has neither Kuznyechik nor
+  Streebog, so the 35 combinations that use them are not checked by cryptsetup.
+- **VeraCrypt 1.26.31** (console build, Linux, no root): mounting needs
+  administrator rights, so the checks are the commands that do not.
+  `--backup-headers` decrypts our header with the password and PIM;
+  `--restore-headers` from the embedded backup decrypts our backup header,
+  and the restored volume opens with our reader, with the same master keys
+  and data area. The header fields of a volume VeraCrypt created itself
+  (`--create`, AES, SHA-512, PIM 1) equal ours.
+- **Speed:** a 64 MiB AES/SHA-512 PIM 1 container with a full fill takes
+  123 ms with `Create` and 0.74 s with `veracrypt --text --create`, on one
+  Ryzen 9 7950X (`BenchmarkCreate64MiB`; the VeraCrypt time includes its
+  process start).
+
+`TestWriteOracleVolumes`, `TestCryptsetupAccepts` and `TestVeraCryptRestored`
+run these checks when `VERACRYPT_ORACLE_DIR` (and `VERACRYPT_CRYPTSETUP`)
+are set, and skip otherwise.
 
 ## How it is checked
 

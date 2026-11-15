@@ -1,0 +1,6 @@
+go test fuzz v1
+string("serpent-twofish-aes")
+string("whirlpool")
+int(2)
+int64(299520)
+[]byte("pw")

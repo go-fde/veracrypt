@@ -1,0 +1,6 @@
+go test fuzz v1
+string("camellia")
+string("sha256")
+int(1)
+int64(299008)
+[]byte("p")

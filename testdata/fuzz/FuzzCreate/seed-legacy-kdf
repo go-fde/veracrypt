@@ -1,0 +1,6 @@
+go test fuzz v1
+string("aes")
+string("sha1")
+int(1)
+int64(300000)
+[]byte("pw")

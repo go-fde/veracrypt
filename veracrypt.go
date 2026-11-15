@@ -16,7 +16,8 @@
 // PIM, keyfiles, hidden volumes and backup headers, and system encryption
 // (Options.System: an encrypted boot drive or system partition, header at
 // byte 31744, including VeraCrypt's boot KDF rows; not a hidden operating
-// system). It does not write.
+// system). A Device does not write; Create makes new VeraCrypt volumes
+// (see create.go).
 //
 // Untrusted images: the trial costs as much as the caller allows; Limits
 // bounds the number of key derivations, the PBKDF2 iterations and the
