@@ -17,12 +17,18 @@ import (
 // binary is the fake (see TestMain), not the test suite.
 const fakeTartEnv = "VCMOUNT_FAKE_TART_DIR"
 
+// fakeTartFailEnv makes every fake call whose arguments contain it fail.
+const fakeTartFailEnv = "VCMOUNT_FAKE_TART_FAIL"
+
 type fakeCall struct {
 	Args  []string
 	Stdin string
 }
 
 func TestMain(m *testing.M) {
+	if n := filepath.Base(os.Args[0]); fakeToolNames[n] {
+		os.Exit(fakeTool(n, os.Args[1:]))
+	}
 	if dir := os.Getenv(fakeTartEnv); dir != "" {
 		os.Exit(fakeTart(dir, os.Args[1:]))
 	}
@@ -50,6 +56,9 @@ func fakeTart(dir string, args []string) int {
 	}
 	f.Write(append(line, '\n'))
 	f.Close()
+	if s := os.Getenv(fakeTartFailEnv); s != "" && strings.Contains(strings.Join(args, " "), s) {
+		return 1
+	}
 	if len(args) > 0 && args[0] == "exec" && args[len(args)-1] == "true" {
 		if _, err := os.Stat(up); err != nil {
 			return 1
@@ -151,6 +160,58 @@ func TestHostRefusesAShortPassphraseBeforeTheVM(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "up")); err == nil {
 		t.Error("a VM was started for a refused passphrase")
+	}
+}
+
+// runFakeHost runs runHost against the fake tart and returns the error and the
+// calls; fail makes the fake fail every call containing it, pre creates "up".
+func runFakeHost(t *testing.T, bin, fail string, pre bool) (error, []fakeCall) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv(fakeTartEnv, dir)
+	t.Setenv(fakeTartFailEnv, fail)
+	if pre {
+		os.WriteFile(filepath.Join(dir, "up"), nil, 0o600)
+	}
+	self, _ := os.Executable()
+	h := host{vm: "vm1", guestBin: bin, pass: []byte(testPass), tartBin: self, out: io.Discard}
+	err := h.runHost()
+	var calls []fakeCall
+	if _, serr := os.Stat(filepath.Join(dir, "log")); serr == nil {
+		calls = readFakeLog(t, dir)
+	}
+	return err, calls
+}
+
+func carriesPassphrase(calls []fakeCall) bool {
+	for _, c := range calls {
+		if strings.Contains(c.Stdin, testPass) || strings.Contains(strings.Join(c.Args, " "), testPass) {
+			return true
+		}
+	}
+	return false
+}
+
+// Every failing step stops the run before the passphrase is sent.
+func TestHostStopsBeforeSendingOnAFailedStep(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "guestbin")
+	os.WriteFile(bin, []byte("ELF"), 0o600)
+	for name, c := range map[string]struct {
+		bin, fail, want string
+		pre             bool
+	}{
+		"already running":    {bin, "", "already running", true},
+		"prepare step":       {bin, "apt-get install", "prepare the VM", false},
+		"guest binary":       {filepath.Join(t.TempDir(), "missing"), "", "no such file", false},
+		"copy of the binary": {bin, "cat > ~/vcmount/vcmount", "exit status", false},
+	} {
+		err, calls := runFakeHost(t, c.bin, c.fail, c.pre)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v", name, err)
+		}
+		if carriesPassphrase(calls) {
+			t.Errorf("%s: the passphrase was sent", name)
+		}
 	}
 }
 

@@ -334,15 +334,8 @@ func runGuest(dir string, pass []byte, out io.Writer) error {
 type host struct {
 	vm, guestBin string
 	pass         []byte // the passphrase, in memory only
-	tartBin      string // "tart"; a test replaces it
+	tartBin      string // the tart program: RootCmd sets "tart", a test a fake
 	out          io.Writer
-}
-
-func (h host) tart() string {
-	if h.tartBin != "" {
-		return h.tartBin
-	}
-	return "tart"
 }
 
 // exec runs "tart exec" in the VM; stdin, when not nil, is sent to the
@@ -352,7 +345,7 @@ func (h host) exec(stdin io.Reader, args ...string) error {
 	if stdin != nil {
 		a = append(a, "-i")
 	}
-	cmd := exec.Command(h.tart(), append(append(a, h.vm), args...)...)
+	cmd := exec.Command(h.tartBin, append(append(a, h.vm), args...)...)
 	cmd.Stdin = stdin
 	cmd.Stdout, cmd.Stderr = h.out, h.out
 	return cmd.Run()
@@ -375,7 +368,7 @@ func (h host) runHost() error {
 	if err := checkPassphrase(h.pass); err != nil {
 		return err
 	}
-	run := exec.Command(h.tart(), "run", "--no-graphics", h.vm)
+	run := exec.Command(h.tartBin, "run", "--no-graphics", h.vm)
 	if err := run.Start(); err != nil {
 		return err
 	}
@@ -387,7 +380,7 @@ func (h host) runHost() error {
 	cleanup := func() {
 		once.Do(func() {
 			h.exec(nil, "sh", "-c", "sudo rm -rf ~/vcmount/out")
-			exec.Command(h.tart(), "stop", h.vm).Run()
+			exec.Command(h.tartBin, "stop", h.vm).Run()
 			run.Process.Kill()
 			run.Wait()
 		})
@@ -472,7 +465,7 @@ func RootCmd() *cobra.Command {
 	guestCmd.MarkFlagsOneRequired("stdin", "secret", "passfile")
 	guestCmd.MarkFlagsMutuallyExclusive("stdin", "secret", "passfile")
 
-	var h host
+	h := host{tartBin: "tart"}
 	var hSecret, hPassFile string
 	hostCmd := &cobra.Command{
 		Use: "host", Short: "drive a Tart VM from macOS", Args: cobra.NoArgs,

@@ -163,9 +163,12 @@ func TestRootSecretRefusals(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 			continue
 		}
-		// refused for the source, never because a VM was reached
-		if strings.Contains(err.Error(), "VM") {
-			t.Errorf("%s: went past the secret: %v", name, err)
+		// refused for the source: not for the VM, not for the root check of
+		// the guest, not for an empty passphrase that a swallowed error leaves
+		for _, later := range []string{"VM", "runs as root", "at least 20 bytes"} {
+			if strings.Contains(err.Error(), later) {
+				t.Errorf("%s: went past the secret (%q): %v", name, later, err)
+			}
 		}
 		if strings.Contains(err.Error()+errb.String(), testPass) {
 			t.Errorf("%s: output names the secret", name)

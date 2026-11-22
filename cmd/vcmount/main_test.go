@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -52,6 +54,18 @@ func TestCheckPassphrase(t *testing.T) {
 		if err := checkPassphrase([]byte(body)); (err == nil) != ok {
 			t.Errorf("%q: %v", body, err)
 		}
+	}
+}
+
+type brokenReader struct{}
+
+func (brokenReader) Read([]byte) (int, error) { return 0, errors.New("pipe broke") }
+
+// A failed read is an error, never a passphrase made of what arrived before.
+func TestReadStdinPassphraseReadError(t *testing.T) {
+	got, err := readStdinPassphrase(io.MultiReader(strings.NewReader("a-passphrase-long-enough-ok"), brokenReader{}))
+	if err == nil || got != nil {
+		t.Fatalf("%q, %v", got, err)
 	}
 }
 
