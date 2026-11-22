@@ -88,6 +88,28 @@ jobs:
           cache: true
       - run: go test -run '^$' -fuzz '^FuzzParse$' -fuzztime 60s -fuzzminimizetime 5s .
 
+  # cmd/* are their own modules: no job above compiles them. Their tests are
+  # unit tests (no VM, no Botan, no root).
+  cmd:
+    name: cmd/${{ matrix.module }}
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [vcmount, vcoracle]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cmd/${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.4'
+          cache: true
+          cache-dependency-path: cmd/${{ matrix.module }}/go.sum
+      - run: go vet ./...
+      - run: go test -timeout 10m ./...
+
   govulncheck:
     runs-on: ubuntu-latest
     steps:
