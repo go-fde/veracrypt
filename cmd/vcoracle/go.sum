@@ -1,6 +1,8 @@
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
 github.com/ebitengine/purego v0.11.3 h1:OB+JLpdm7ioymhyA+6s5kbb/uOuYycAgL8NNTFc5MLg=
 github.com/ebitengine/purego v0.11.3/go.mod h1:DCHPP08djqhNSoTfImcnHYQRZmd0qhakvrozqaEYhGQ=
+github.com/go-authn/secretsource v0.8.0 h1:3pUW2vvuftmeikSrxY5a9ZMye5Y8BTplMEKfc7IeeXU=
+github.com/go-authn/secretsource v0.8.0/go.mod h1:LHIVIzADGmzgE5IwtqTmKMcwM6RGvUXX+qZQojtmzlM=
 github.com/go-compressions/xz v0.3.1 h1:z4U2wNrV71pgUvxkSlBuoZc7JCJ7d+Tb3tSjyMeGhKc=
 github.com/go-compressions/xz v0.3.1/go.mod h1:ZbYM2CbKR8SZzq6rqhqlWFnBaXrNhWwQyTSslnYQ0FU=
 github.com/go-encryptions/camellia v0.1.0 h1:r015TiEcYgOhA9dkR2JnWDtj9Gff0lPHaRJsT7GGWF4=
@@ -19,6 +21,14 @@ github.com/go-encryptions/xts v0.3.1 h1:3ygCAZj3jRDMF3+Xtb572er7bLDk4tQ6lX9pg+Wl
 github.com/go-encryptions/xts v0.3.1/go.mod h1:4nI556Nyeap1LnZbEckm+/ljpXPCdUPY4lXv6aWTakI=
 github.com/go-fde/veracrypt v0.7.1 h1:3JyV6dtqN1CCCGcXwTW1gMzMDb+ohm9Nf/PY7C88GL4=
 github.com/go-fde/veracrypt v0.7.1/go.mod h1:3IY4W1fsFX9EvXVlDKBCW70BUG51GgB6ehYgK4jlNLQ=
+github.com/go-freedesktop/secretservice v0.4.0 h1:PV2fLZ/ZsL2R5T6CMBOQ/5lmwP73rUJ1PN0FG6v5gQ0=
+github.com/go-freedesktop/secretservice v0.4.0/go.mod h1:JQ2M/y+g4Img7KM2bleUTz2EruH9fpkJ4GHqQpYVAMo=
+github.com/go-macos/keychain v0.3.1 h1:pH/sxiVCTqj2rafKiWsufWKrRlHZ7YRNiePgrMieRQs=
+github.com/go-macos/keychain v0.3.1/go.mod h1:R+xl/40QhjhgzncuCdZLe/fRvg9UEeOIvOzMxtymHs4=
+github.com/go-macos/objc v0.11.2 h1:d6+Zf3SA4zpclfFDcLB6Ttlb3o7cXt8Ah1oGhC+5/C8=
+github.com/go-macos/objc v0.11.2/go.mod h1:G2YcKu5C2Xs08vcM/CUUUeYUi9YeCHmkWcW+5RGwE/g=
+github.com/godbus/dbus/v5 v5.2.4 h1:F2gUCy++NMIxGmo9J+z5le/+ZC8W1OgeR51P4i9ZB/U=
+github.com/godbus/dbus/v5 v5.2.4/go.mod h1:3AAv2+hPq5rdnr5txxxRwiGjPXamgoIHgz9FPBfOp3c=
 github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=
 github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
 github.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=
