@@ -21,7 +21,10 @@ reference may sit in argv or a shell history, the secret never does.
 | `file:PATH` | a regular file, mode 0600 or stricter, owned by you, not a symlink; one trailing newline is stripped |
 
 A loose mode, a symlink or a secret longer than 4096 bytes is refused before
-anything runs.
+anything runs. The check is made when the file is opened, so a symlink at the
+last component is refused for good: point `--secret file:` (or `--passfile`) at
+the real file, not at a link to it (secretsource v0.9.0). The file must also be
+owned by the user running the tool.
 
 `--passfile PATH` is deprecated and means `--secret file:PATH` (same checks,
 plus a warning on stderr). It is mutually exclusive with `--secret`.
