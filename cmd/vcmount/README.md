@@ -10,13 +10,43 @@ the pull requests (#22 and its patch) for the results: 90 volumes, 0 failed.
 ```sh
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o vcmount-arm64 .
 go build -o vcmount-host .
-VCMOUNT=1 ./vcmount-host host --vm vcoracle-vm --passfile pw.txt --guest-bin vcmount-arm64
+VCMOUNT=1 ./vcmount-host host --vm vcoracle-vm --secret keychain:vcmount/test --guest-bin vcmount-arm64
 ```
 
-The passphrase file holds at least 20 bytes and no newline. Keep it outside
-any repository; it goes into the VM through the standard input of
-`tart exec -i`, onto its tmpfs, and is deleted afterwards (also on SIGINT and
-SIGTERM). The volumes use PIM 1 and a test passphrase: do not reuse a real one.
+## The passphrase: `--secret`
+
+`--secret <ref>` names where the passphrase comes from; it is resolved on the
+host by [go-authn/secretsource](https://github.com/go-authn/secretsource)
+v0.8.0, so the reference may sit in argv or a shell history, the secret never
+does. It holds at least 20 bytes and no newline.
+
+| Reference | Source |
+|---|---|
+| `systemd-creds:NAME` | a systemd credential (`$CREDENTIALS_DIRECTORY`, e.g. `LoadCredentialEncrypted=`), byte for byte |
+| `keychain:SERVICE/ACCOUNT` | a macOS Keychain item |
+| `keepassxc:...` | a KeePassXC entry |
+| `file:PATH` | a regular file, mode 0600 or stricter, owned by you, not a symlink; one trailing newline is stripped |
+
+A loose mode, a symlink or a secret longer than 4096 bytes is refused before
+the VM is touched.
+
+The passphrase reaches the guest on the standard input of `tart exec -i`, which
+feeds `vcmount guest --stdin`: no file is written in the VM (it used to be
+`/dev/shm/vcmount-pw`), and it is in no argument and no environment variable.
+Inside the VM, `vcmount guest` also accepts `--secret` for a manual run.
+
+`--passfile PATH` is deprecated on both subcommands and means
+`--secret file:PATH` (same checks, plus a warning on stderr). It is mutually
+exclusive with `--secret` (and, for `guest`, with `--stdin`).
+
+If you seal a credential to a TPM with `systemd-creds encrypt`, do not pin it
+to a bare `--tpm2-pcrs=7`: a firmware or shim update (or a vTPM migration)
+changes the measured state and the credential becomes unreadable. Keep a
+recovery path: seal with `host+tpm2` and no PCRs, or bind a signed PCR policy
+(`--tpm2-public-key`), or use systemd-pcrlock, or keep a documented re-seal
+procedure with the passphrase stored elsewhere.
+
+The volumes use PIM 1 and a test passphrase: do not reuse a real one.
 
 ## The VM: `vcoracle-vm`
 
