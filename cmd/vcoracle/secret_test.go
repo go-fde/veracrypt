@@ -104,8 +104,12 @@ func TestResolveSecretRefusals(t *testing.T) {
 }
 
 func TestResolveSecretNoSource(t *testing.T) {
-	if _, err := resolveSecret(context.Background(), "", "", nil); err == nil {
-		t.Fatal("no source accepted")
+	if _, err := resolveSecret(context.Background(), "", "", nil); err == nil || !strings.Contains(err.Error(), "required") {
+		t.Fatal("no source accepted, or refused for another reason:", err)
+	}
+	both := writeMode(t, "both", []byte(testPass), 0o600)
+	if _, err := resolveSecret(context.Background(), "file:"+both, both, nil); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatal("both sources accepted, or refused for another reason:", err)
 	}
 }
 
