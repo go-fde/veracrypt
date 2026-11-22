@@ -7,15 +7,15 @@
 // the volume with one tool and reads a file back with the other.
 //
 //	vcmount host   drives a Tart VM from macOS: starts it, copies this binary
-//	               and the passphrase file in, installs VeraCrypt (checksum and
-//	               PGP signature verified), runs "vcmount guest", deletes the
-//	               passphrase, stops the VM.
+//	               in, installs VeraCrypt (checksum and PGP signature
+//	               verified), runs "vcmount guest --stdin" with the passphrase
+//	               on its standard input, stops the VM.
 //	vcmount guest  runs inside the VM as root.
 //
-// The passphrase is read from a file by the program that needs it and is
-// never in a command line, an environment variable or the output; it goes
-// into the VM through the standard input of "tart exec -i" and is deleted
-// there afterwards. Both modes need VCMOUNT=1.
+// The host resolves the passphrase from a go-authn/secretsource reference
+// (--secret). It is never in a command line, an environment variable, a log or
+// the output, and never a file in the VM: it is the standard input of
+// "tart exec -i" feeding "vcmount guest --stdin". Both modes need VCMOUNT=1.
 package main
 
 import (
@@ -32,6 +32,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-authn/secretsource"
 	"github.com/go-fde/veracrypt"
 	"github.com/spf13/cobra"
 )
@@ -60,17 +61,12 @@ var kdfs = []veracrypt.KDF{veracrypt.SHA512, veracrypt.SHA256, veracrypt.BLAKE2s
 
 // ---------------------------------------------------------------- guest
 
-// sh runs a command with stdin from a file (or nil) and returns its combined
-// output. The passphrase file is only ever a stdin.
-func sh(stdin string, name string, args ...string) (string, error) {
+// sh runs a command with stdin from memory (or none when nil) and returns its
+// combined output. The passphrase is only ever a stdin, never a file.
+func sh(stdin []byte, name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
-	if stdin != "" {
-		f, err := os.Open(stdin)
-		if err != nil {
-			return "", err
-		}
-		defer f.Close()
-		cmd.Stdin = f
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
 	}
 	out, err := cmd.CombinedOutput()
 	return string(out), err
@@ -104,8 +100,9 @@ func firstDiff(a, b []byte) int {
 }
 
 type guest struct {
-	dir, pass string
-	out       io.Writer
+	dir  string
+	pass []byte // the passphrase, in memory only; wiped by runGuest
+	out  io.Writer
 }
 
 func (g guest) vcMount(vol, mp, fs string, ro bool) (string, error) {
@@ -122,7 +119,7 @@ func (g guest) vcMount(vol, mp, fs string, ro bool) (string, error) {
 
 // vcUmount dismounts every VeraCrypt volume (this program mounts one at a
 // time); "-d <path>" does not find a volume mounted with --filesystem=none.
-func (g guest) vcUmount(string) { sh("", "veracrypt", "--text", "--non-interactive", "-d") }
+func (g guest) vcUmount(string) { sh(nil, "veracrypt", "--text", "--non-interactive", "-d") }
 
 // plainViaCryptsetup returns the plaintext cryptsetup maps, or why not.
 func (g guest) plainViaCryptsetup(vol string) ([]byte, string) {
@@ -131,7 +128,7 @@ func (g guest) plainViaCryptsetup(vol string) ([]byte, string) {
 		return nil, "refused: " + lastLine(out)
 	}
 	b, err := os.ReadFile("/dev/mapper/" + name)
-	if out, cerr := sh("", "cryptsetup", "close", name); cerr != nil {
+	if out, cerr := sh(nil, "cryptsetup", "close", name); cerr != nil {
 		return nil, "close failed (a leftover mapping would poison later volumes): " + lastLine(out)
 	}
 	if err != nil {
@@ -152,14 +149,8 @@ func (g guest) check(c veracrypt.Cipher, k veracrypt.KDF) bool {
 	name := fmt.Sprintf("%s/%s", c, k)
 	vol := filepath.Join(g.dir, fmt.Sprintf("%s.%s.hc", c, k))
 	os.Remove(vol)
-	pass, err := os.ReadFile(g.pass)
-	if err != nil {
-		fmt.Fprintf(g.out, "FAIL %-42s %v\n", name, err)
-		return true
-	}
 	want := plain(size - 2*dataOff)
-	v, err := veracrypt.CreateFile(vol, size, pass, veracrypt.CreateOptions{Cipher: c, KDF: k, PIM: pim})
-	clear(pass)
+	v, err := veracrypt.CreateFile(vol, size, g.pass, veracrypt.CreateOptions{Cipher: c, KDF: k, PIM: pim})
 	if err == nil {
 		_, err = v.WriteAt(want, 0)
 		if e := v.Close(); err == nil {
@@ -250,7 +241,7 @@ func (g guest) filesystem(vol, mp, dev, fs string, cryptsetupOK bool) (string, b
 	if fs == "vfat" {
 		mk = []string{"mkfs.vfat", dev}
 	}
-	if out, err := sh("", mk[0], mk[1:]...); err != nil {
+	if out, err := sh(nil, mk[0], mk[1:]...); err != nil {
 		return fs + ": mkfs: " + lastLine(out), false
 	}
 	g.vcUmount(mp)
@@ -259,7 +250,7 @@ func (g guest) filesystem(vol, mp, dev, fs string, cryptsetupOK bool) (string, b
 	}
 	content := []byte("vcmount " + fs + " " + filepath.Base(vol))
 	werr := os.WriteFile(filepath.Join(mp, "probe.txt"), content, 0o600)
-	sh("", "sync")
+	sh(nil, "sync")
 	g.vcUmount(mp)
 	if werr != nil {
 		return fs + ": write: " + werr.Error(), false
@@ -280,13 +271,13 @@ func (g guest) filesystem(vol, mp, dev, fs string, cryptsetupOK bool) (string, b
 	if out, err := sh(g.pass, "cryptsetup", "open", "--type", "tcrypt", "--veracrypt", fmt.Sprintf("--veracrypt-pim=%d", pim), "--readonly", vol, name); err != nil {
 		return fs + ": cryptsetup open: " + lastLine(out), false
 	}
-	defer sh("", "cryptsetup", "close", name)
+	defer sh(nil, "cryptsetup", "close", name)
 	m2 := mp + "-ro"
 	os.MkdirAll(m2, 0o700)
-	if out, err := sh("", "mount", "-o", "ro", "/dev/mapper/"+name, m2); err != nil {
+	if out, err := sh(nil, "mount", "-o", "ro", "/dev/mapper/"+name, m2); err != nil {
 		return fs + ": cryptsetup mount: " + lastLine(out), false
 	}
-	defer sh("", "umount", m2)
+	defer sh(nil, "umount", m2)
 	got, err := os.ReadFile(filepath.Join(m2, "probe.txt"))
 	if err != nil || !bytes.Equal(got, content) {
 		return fs + ": file differs through cryptsetup", false
@@ -294,7 +285,27 @@ func (g guest) filesystem(vol, mp, dev, fs string, cryptsetupOK bool) (string, b
 	return fs + ": VeraCrypt wrote, cryptsetup read", true
 }
 
-func runGuest(dir, pass string, out io.Writer) error {
+// readStdinPassphrase reads the passphrase the host sent on the guest's
+// standard input (nothing is ever written to a file in the guest), at most
+// secretsource.MaxSize bytes, and applies the same rules as the host does.
+func readStdinPassphrase(r io.Reader) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(r, secretsource.MaxSize+1))
+	if err != nil {
+		clear(b)
+		return nil, err
+	}
+	if len(b) > secretsource.MaxSize {
+		clear(b)
+		return nil, fmt.Errorf("the passphrase on standard input is longer than %d bytes", secretsource.MaxSize)
+	}
+	if err := checkPassphrase(b); err != nil {
+		clear(b)
+		return nil, err
+	}
+	return b, nil
+}
+
+func runGuest(dir string, pass []byte, out io.Writer) error {
 	if os.Geteuid() != 0 {
 		return errors.New("the guest runs as root: this mounts volumes")
 	}
@@ -321,63 +332,55 @@ func runGuest(dir, pass string, out io.Writer) error {
 // ----------------------------------------------------------------- host
 
 type host struct {
-	vm, passFile, guestBin string
-	out                    io.Writer
+	vm, guestBin string
+	pass         []byte // the passphrase, in memory only
+	tartBin      string // the tart program: RootCmd sets "tart", a test a fake
+	out          io.Writer
 }
 
-// tart runs "tart exec" in the VM; stdin, when set, is a local file.
-func (h host) exec(stdin string, args ...string) error {
+// exec runs "tart exec" in the VM; stdin, when not nil, is sent to the
+// command's standard input ("-i").
+func (h host) exec(stdin io.Reader, args ...string) error {
 	a := []string{"exec"}
-	if stdin != "" {
+	if stdin != nil {
 		a = append(a, "-i")
 	}
-	cmd := exec.Command("tart", append(append(a, h.vm), args...)...)
-	if stdin != "" {
-		f, err := os.Open(stdin)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		cmd.Stdin = f
-	}
+	cmd := exec.Command(h.tartBin, append(append(a, h.vm), args...)...)
+	cmd.Stdin = stdin
 	cmd.Stdout, cmd.Stderr = h.out, h.out
 	return cmd.Run()
 }
 
-// checkPassphraseFile enforces what the help text says: at least 20 bytes
+// checkPassphrase enforces what the help text says: at least 20 bytes
 // (VeraCrypt refuses a low PIM with a shorter one) and no newline (Create
 // would take it as part of the passphrase, the mounting tools would not).
-func checkPassphraseFile(path string) error {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	defer clear(b)
+func checkPassphrase(b []byte) error {
 	if len(b) < 20 || bytes.ContainsAny(b, "\r\n") {
-		return errors.New("the passphrase file must hold at least 20 bytes and no newline")
+		return errors.New("the passphrase must hold at least 20 bytes and no newline")
 	}
 	return nil
 }
 
 func (h host) runHost() error {
-	if h.exec("", "true") == nil {
+	if h.exec(nil, "true") == nil {
 		return errors.New("the VM is already running (another session's?): stop it first")
 	}
-	if err := checkPassphraseFile(h.passFile); err != nil {
+	if err := checkPassphrase(h.pass); err != nil {
 		return err
 	}
-	run := exec.Command("tart", "run", "--no-graphics", h.vm)
+	run := exec.Command(h.tartBin, "run", "--no-graphics", h.vm)
 	if err := run.Start(); err != nil {
 		return err
 	}
-	// Whatever happens, including SIGINT and SIGTERM: delete the passphrase
-	// and the volumes in the VM, then tart stop (so the guest shuts down
-	// cleanly), and only then kill the tart process.
+	// Whatever happens, including SIGINT and SIGTERM: delete the volumes in
+	// the VM, then tart stop (so the guest shuts down cleanly), and only then
+	// kill the tart process. The passphrase is never a file in the guest: it
+	// goes to "vcmount guest --stdin" on the standard input of tart exec -i.
 	var once sync.Once
 	cleanup := func() {
 		once.Do(func() {
-			h.exec("", "sh", "-c", "rm -f /dev/shm/vcmount-pw; sudo rm -rf ~/vcmount/out")
-			exec.Command("tart", "stop", h.vm).Run()
+			h.exec(nil, "sh", "-c", "sudo rm -rf ~/vcmount/out")
+			exec.Command(h.tartBin, "stop", h.vm).Run()
 			run.Process.Kill()
 			run.Wait()
 		})
@@ -387,7 +390,7 @@ func (h host) runHost() error {
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	go func() { <-sig; cleanup(); osExit(130) }()
 	deadline := time.Now().Add(3 * time.Minute)
-	for h.exec("", "true") != nil {
+	for h.exec(nil, "true") != nil {
 		if time.Now().After(deadline) {
 			return errors.New("the VM does not answer tart exec")
 		}
@@ -399,17 +402,21 @@ func (h host) runHost() error {
 		{"sh", "-c", "cd ~/vcmount && deb=veracrypt-console-" + vcVersion + "-Ubuntu-24.04-arm64.deb && sha256sum --ignore-missing -c veracrypt-" + vcVersion + "-sha256sum.txt 2>/dev/null && export GNUPGHOME=$PWD/gnupg && mkdir -p -m 700 $GNUPGHOME && gpg -q --import VeraCrypt_PGP_public_key.asc 2>/dev/null && { gpg --status-fd 1 --verify $deb.sig $deb > st 2>/dev/null; true; } && grep -q '^\\[GNUPG:\\] GOODSIG ' st && grep -q '^\\[GNUPG:\\] VALIDSIG " + vcFingerprint + " ' st && ! grep -q '^\\[GNUPG:\\] \\(EXPKEYSIG\\|REVKEYSIG\\|EXPSIG\\|BADSIG\\) ' st && sudo apt-get install -y -q ./$deb >/dev/null && veracrypt --version"},
 	}
 	for _, s := range steps {
-		if err := h.exec("", s...); err != nil {
+		if err := h.exec(nil, s...); err != nil {
 			return fmt.Errorf("prepare the VM: %w", err)
 		}
 	}
-	if err := h.exec(h.guestBin, "sh", "-c", "umask 077; cat > ~/vcmount/vcmount && chmod 700 ~/vcmount/vcmount"); err != nil {
+	bin, err := os.Open(h.guestBin)
+	if err != nil {
 		return err
 	}
-	if err := h.exec(h.passFile, "sh", "-c", "umask 077; cat > /dev/shm/vcmount-pw"); err != nil { // tmpfs: never on the VM's disk
+	defer bin.Close()
+	if err := h.exec(bin, "sh", "-c", "umask 077; cat > ~/vcmount/vcmount && chmod 700 ~/vcmount/vcmount"); err != nil {
 		return err
 	}
-	return h.exec("", "sh", "-c", "cd ~/vcmount && sudo VCMOUNT=1 ./vcmount guest --dir $PWD/out --passfile /dev/shm/vcmount-pw")
+	// The passphrase is the standard input of the guest program: no file, no
+	// argument, no environment variable in the guest.
+	return h.exec(bytes.NewReader(h.pass), "sh", "-c", "cd ~/vcmount && sudo VCMOUNT=1 ./vcmount guest --dir $PWD/out --stdin")
 }
 
 // ----------------------------------------------------------------- main
@@ -423,37 +430,68 @@ func RootCmd() *cobra.Command {
 		}
 		return nil
 	}
-	var dir, pass string
+	const secretHelp = "reference of the passphrase (at least 20 bytes, no newline): systemd-creds:NAME, keychain:SERVICE/ACCOUNT, keepassxc:..., or file:PATH (owner-only, not a symlink, at most 4096 bytes)"
+	var dir, gSecret, gPassFile string
+	var fromStdin bool
 	guestCmd := &cobra.Command{
 		Use: "guest", Short: "run inside the VM, as root", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := gate(); err != nil {
 				return err
 			}
+			var pass []byte
+			var err error
+			if fromStdin {
+				pass, err = readStdinPassphrase(cmd.InOrStdin())
+			} else {
+				pass, err = resolveSecret(cmd.Context(), gSecret, gPassFile, cmd.ErrOrStderr())
+				if err == nil {
+					err = checkPassphrase(pass)
+				}
+			}
+			if err != nil {
+				return err
+			}
+			defer clear(pass)
 			return runGuest(dir, pass, cmd.OutOrStdout())
 		},
 	}
 	guestCmd.Flags().StringVar(&dir, "dir", "", "directory for the volumes")
-	guestCmd.Flags().StringVar(&pass, "passfile", "", "file holding the passphrase, no newline")
+	guestCmd.Flags().BoolVar(&fromStdin, "stdin", false, "read the passphrase from the standard input (what vcmount host does)")
+	guestCmd.Flags().StringVar(&gSecret, "secret", "", secretHelp)
+	guestCmd.Flags().StringVar(&gPassFile, "passfile", "", "deprecated: same as --secret file:PATH")
+	guestCmd.Flags().MarkDeprecated("passfile", "use --secret file:PATH")
 	guestCmd.MarkFlagRequired("dir")
-	guestCmd.MarkFlagRequired("passfile")
+	guestCmd.MarkFlagsOneRequired("stdin", "secret", "passfile")
+	guestCmd.MarkFlagsMutuallyExclusive("stdin", "secret", "passfile")
 
-	var h host
+	h := host{tartBin: "tart"}
+	var hSecret, hPassFile string
 	hostCmd := &cobra.Command{
 		Use: "host", Short: "drive a Tart VM from macOS", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := gate(); err != nil {
 				return err
 			}
+			// Resolved before the VM is touched: a refused source starts nothing.
+			pass, err := resolveSecret(cmd.Context(), hSecret, hPassFile, cmd.ErrOrStderr())
+			if err != nil {
+				return err
+			}
+			defer clear(pass)
+			h.pass = pass
 			h.out = cmd.OutOrStdout()
 			return h.runHost()
 		},
 	}
 	hostCmd.Flags().StringVar(&h.vm, "vm", "", "name of a Tart Linux arm64 VM (Ubuntu 24.04, passwordless sudo, guest agent)")
-	hostCmd.Flags().StringVar(&h.passFile, "passfile", "", "local file holding the passphrase (at least 20 bytes, no newline)")
+	hostCmd.Flags().StringVar(&hSecret, "secret", "", secretHelp)
+	hostCmd.Flags().StringVar(&hPassFile, "passfile", "", "deprecated: same as --secret file:PATH")
+	hostCmd.Flags().MarkDeprecated("passfile", "use --secret file:PATH")
 	hostCmd.Flags().StringVar(&h.guestBin, "guest-bin", "", "this program built for linux/arm64")
 	hostCmd.MarkFlagRequired("vm")
-	hostCmd.MarkFlagRequired("passfile")
+	hostCmd.MarkFlagsOneRequired("secret", "passfile")
+	hostCmd.MarkFlagsMutuallyExclusive("secret", "passfile")
 	hostCmd.MarkFlagRequired("guest-bin")
 	root.AddCommand(guestCmd, hostCmd)
 	return root
