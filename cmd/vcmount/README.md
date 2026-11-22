@@ -28,7 +28,10 @@ does. It holds at least 20 bytes and no newline.
 | `file:PATH` | a regular file, mode 0600 or stricter, owned by you, not a symlink; one trailing newline is stripped |
 
 A loose mode, a symlink or a secret longer than 4096 bytes is refused before
-the VM is touched.
+the VM is touched. The check is made when the file is opened, so a symlink at
+the last component is refused for good: point `--secret file:` at the real file,
+not at a link to it (secretsource v0.9.0). The file must also be owned by the
+user running the tool.
 
 The passphrase reaches the guest on the standard input of `tart exec -i`, which
 feeds `vcmount guest --stdin`: no file is written in the VM (it used to be
