@@ -313,7 +313,13 @@ func check(t tools, dir string, pass []byte, ci int, k kdf) verdict {
 	// Botan, end to end.
 	// Botan, end to end: every derive or decrypt error is a FAIL. The primary
 	// header and the backup header (a new salt, the same master keys).
-	var master []byte
+	// Every master key copy is wiped on every return path.
+	var master, backup, mk []byte
+	defer func() {
+		clear(master)
+		clear(backup)
+		clear(mk)
+	}()
 	for i, off := range []int{0, size - dataOff} {
 		hk, err := t.derive(k, pass, raw[off:off+64])
 		if err != nil {
@@ -326,7 +332,10 @@ func check(t tools, dir string, pass []byte, ci int, k kdf) verdict {
 		}
 		if i == 0 {
 			master = m
-		} else if !bytes.Equal(master, m) {
+		} else {
+			backup = m
+		}
+		if i == 1 && !bytes.Equal(master, m) {
 			return fail("the backup header holds other master keys")
 		}
 	}
@@ -355,7 +364,9 @@ func check(t tools, dir string, pass []byte, ci int, k kdf) verdict {
 	case derr != nil:
 		return fail("cryptsetup refuses the volume: %s", lastLine(out))
 	default:
-		chain, mk, payload, err := parseDump(out)
+		var chain string
+		var payload uint64
+		chain, mk, payload, err = parseDump(out)
 		if err != nil {
 			return fail("%v", err)
 		}
@@ -370,21 +381,25 @@ func check(t tools, dir string, pass []byte, ci int, k kdf) verdict {
 				return fail("cryptsetup's key block %d differs from the master key Botan found", i)
 			}
 		}
-		clear(mk)
 		used += "; cryptsetup: same chain, offset and keys"
 	}
-	clear(master)
 	return verdict{name, "OK", used}
 }
 
 // openHeader decrypts the 448 header bytes with the header key hk and checks
 // them against the VeraCrypt specification's header layout; it returns the
 // 256-byte master key area.
-func openHeader(t tools, links []link, hk, enc []byte, size int) ([]byte, error) {
+func openHeader(t tools, links []link, hk, enc []byte, size int) (keys []byte, err error) {
 	d, err := xtsChain(t, links, hk, enc, nonce(0), true)
 	if err != nil {
 		return nil, err
 	}
+	// A refused header may still hold real master keys: wipe them.
+	defer func() {
+		if err != nil {
+			clear(d[192:448])
+		}
+	}()
 	be := binary.BigEndian
 	if string(d[:4]) != "VERA" {
 		return nil, errors.New("no VERA magic after decrypting the header")
