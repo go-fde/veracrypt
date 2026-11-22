@@ -106,7 +106,9 @@ type tools struct {
 }
 
 type config struct {
-	dir, passFile, cryptsetup, botanLib string
+	dir, secret, passFile, cryptsetup, botanLib string
+	// pass is the resolved passphrase (see passsecret); never printed.
+	pass []byte
 }
 
 func (c config) tools() (tools, error) {
@@ -116,13 +118,8 @@ func (c config) tools() (tools, error) {
 	}
 	return tools{
 		dump: func(path string) (string, error) {
-			pw, err := os.Open(c.passFile)
-			if err != nil {
-				return "", err
-			}
-			defer pw.Close()
 			cmd := exec.Command(c.cryptsetup, "tcryptDump", "--veracrypt", fmt.Sprintf("--veracrypt-pim=%d", pim), "--dump-volume-key", path)
-			cmd.Stdin = pw
+			cmd.Stdin = bytes.NewReader(c.pass)
 			out, err := cmd.CombinedOutput()
 			return string(out), err
 		},
@@ -447,10 +444,12 @@ func RootCmd() *cobra.Command {
 			if os.Getenv("VCORACLE") != "1" {
 				return errors.New("set VCORACLE=1: this runs outside programs and writes volumes into --dir")
 			}
-			pass, err := os.ReadFile(c.passFile)
+			pass, err := resolveSecret(cmd.Context(), c.secret, c.passFile, cmd.ErrOrStderr())
 			if err != nil {
 				return err
 			}
+			defer clear(pass)
+			c.pass = pass
 			if err := os.MkdirAll(c.dir, 0o700); err != nil {
 				return err
 			}
@@ -463,11 +462,14 @@ func RootCmd() *cobra.Command {
 	}
 	f := cmd.Flags()
 	f.StringVar(&c.dir, "dir", "", "directory for the volumes (durable, outside any repository)")
-	f.StringVar(&c.passFile, "passfile", "", "file holding the passphrase, no newline")
+	f.StringVar(&c.secret, "secret", "", "reference of the passphrase: systemd-creds:NAME, keychain:SERVICE/ACCOUNT, keepassxc:..., or file:PATH (owner-only, not a symlink, at most 4096 bytes)")
+	f.StringVar(&c.passFile, "passfile", "", "deprecated: same as --secret file:PATH")
+	f.MarkDeprecated("passfile", "use --secret file:PATH")
 	f.StringVar(&c.cryptsetup, "cryptsetup", "/usr/sbin/cryptsetup", "cryptsetup binary")
 	f.StringVar(&c.botanLib, "botan-lib", "libbotan-3.so", "path of libbotan-3.so")
 	cmd.MarkFlagRequired("dir")
-	cmd.MarkFlagRequired("passfile")
+	cmd.MarkFlagsOneRequired("secret", "passfile")
+	cmd.MarkFlagsMutuallyExclusive("secret", "passfile")
 	return cmd
 }
 
