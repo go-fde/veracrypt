@@ -186,6 +186,20 @@ func TestCostWide(t *testing.T) {
 	}
 }
 
+// TestCostArgon2: VeraCrypt's Argon2id PIM formula, both sides of PIM 31.
+func TestCostArgon2(t *testing.T) {
+	v := variant(t, "argon2id-t6-m425984KiB")
+	for _, c := range []struct {
+		pim  int
+		iter uint64
+		mem  uint32
+	}{{1, 3, 64 << 10}, {31, 13, 1 << 20}, {32, 14, 1 << 20}, {2000, 1982, 1 << 20}} {
+		if iter, mem := v.cost(c.pim); iter != c.iter || mem != c.mem {
+			t.Errorf("pim %d: (%d, %d), want (%d, %d)", c.pim, iter, mem, c.iter, c.mem)
+		}
+	}
+}
+
 // TestChargeBlocks: one charge per output block of the 192-byte key.
 func TestChargeBlocks(t *testing.T) {
 	for _, c := range []struct {
