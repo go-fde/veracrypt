@@ -222,7 +222,19 @@ Trial decryption is a cost an attacker controls: a large PIM multiplies
 PBKDF2's iterations and Argon2id's memory. `Limits` bounds the number of
 derivations, the PIM (2000 by default), the PBKDF2 iterations and the
 Argon2id memory (1 GiB by default). An open is refused with `ErrLimit`
-before any derivation that would exceed them.
+before any derivation that would exceed them. However high `MaxPIM` is
+raised, a PIM above VeraCrypt's own maxima (2147468, or 65535 for system
+encryption) is refused.
+
+`Limits.Budget` (a [kdfbudget](https://github.com/go-encryptions/kdfbudget)
+`*Budget`) bounds the TOTAL derivation work of one open: every KDF tried,
+and both headers of a hidden-volume open, are charged to it before they run.
+Nil means a fresh `kdfbudget.Default()` per open. This is what bounds
+Argon2id, whose passes `MaxIterations` does not count: a PIM of 2000 is 1982
+passes over 1 GiB, four times the default budget, and is refused. A KDF the
+limits or the budget refused is skipped; if nothing else opens the volume the
+error is `ErrLimit`, never `ErrWrongSecret`. Pass `kdfbudget.Unlimited()` for
+a volume you trust.
 
 Once decrypted, the header is checked before use:
 

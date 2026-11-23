@@ -8,6 +8,7 @@ import (
 	"hash"
 	"hash/crc32"
 
+	"github.com/go-encryptions/kdfbudget"
 	"github.com/go-encryptions/streebog"
 	"github.com/go-encryptions/whirlpool"
 	"golang.org/x/crypto/argon2"
@@ -97,17 +98,58 @@ func hashFor(k KDF) func() hash.Hash {
 // cost returns the PBKDF2 iterations or Argon2id (passes, memory) a variant
 // costs with pim (0: the default), as cryptsetup's TCRYPT_init_hdr computes
 // them.
-func (v kdfVariant) cost(pim int) (iter int, memKiB uint32) {
+// It is computed in uint64: pimMult*pim overflows an int on a 32-bit platform
+// once a caller raises Limits.MaxPIM. pim is never negative here.
+func (v kdfVariant) cost(pim int) (iter uint64, memKiB uint32) {
 	if pim == 0 || !v.veracrypt {
-		return v.iter, v.memKiB
+		return uint64(v.iter), v.memKiB
 	}
+	p := uint64(pim)
 	if v.kdf == Argon2id {
-		if pim <= 31 {
-			return (pim-1)/3 + 3, uint32(1024 * (64 + (pim-1)*32))
+		if p <= 31 {
+			return (p-1)/3 + 3, uint32(1024 * (64 + (p-1)*32))
 		}
-		return pim - 18, 1024 * 1024
+		return p - 18, 1024 * 1024
 	}
-	return v.pimConst + v.pimMult*pim, 0
+	return uint64(v.pimConst) + uint64(v.pimMult)*p, 0
+}
+
+// hashCost and hashSize give a PBKDF2 variant's kdfbudget cost per
+// compression and its digest size, which sets how many output blocks the
+// 192-byte header key takes: 3 for a 64-byte digest, 6 for 32, 10 for 20.
+func hashCost(k KDF) (cost uint64, size int) {
+	switch k {
+	case SHA512:
+		return kdfbudget.CostSHA512, 64
+	case Whirlpool:
+		return kdfbudget.CostWhirlpool, 64
+	case Streebog:
+		return kdfbudget.CostStreebog, 64
+	case SHA256:
+		return kdfbudget.CostSHA256, 32
+	case BLAKE2s:
+		return kdfbudget.CostBLAKE2s, 32
+	case RIPEMD160:
+		return kdfbudget.CostRIPEMD160, 20
+	default: // SHA1
+		return kdfbudget.CostSHA1, 20
+	}
+}
+
+// charge bills b for the derivation of pim, before it runs: the PBKDF2
+// blocks of the 192-byte key, or one Argon2id run. A refusal wraps ErrLimit
+// and spends nothing.
+func (v kdfVariant) charge(b *kdfbudget.Budget, pim int) error {
+	iter, mem := v.cost(pim)
+	if v.kdf == Argon2id {
+		return b.ChargeArgon2(uint64(mem), iter, 1)
+	}
+	cost, size := hashCost(v.kdf)
+	// One call for all the blocks, not one per block: the work is the same,
+	// and a refusal spends nothing, where a loop would leave the blocks
+	// charged before the one that did not fit.
+	blocks := uint64((headerKeyLen + size - 1) / size)
+	return b.ChargePBKDF2(cost*blocks, iter)
 }
 
 func (v kdfVariant) derive(pool, salt []byte, pim int) []byte {
@@ -115,8 +157,12 @@ func (v kdfVariant) derive(pool, salt []byte, pim int) []byte {
 	if v.kdf == Argon2id {
 		return argon2.IDKey(pool, salt, uint32(iter), mem, 1, headerKeyLen)
 	}
-	return pbkdf2.Key(pool, salt, iter, headerKeyLen, hashFor(v.kdf))
+	return pbkdf2.Key(pool, salt, int(iter), headerKeyLen, hashFor(v.kdf))
 }
+
+// deriveKey is what unlockHeader derives with; tests replace it to count the
+// derivations a refusal must prevent.
+var deriveKey = kdfVariant.derive
 
 func (v kdfVariant) String() string {
 	iter, mem := v.cost(0)
