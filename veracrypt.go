@@ -21,7 +21,8 @@
 //
 // Untrusted images: the trial costs as much as the caller allows; Limits
 // bounds the number of key derivations, the PBKDF2 iterations and the
-// Argon2id memory a PIM can ask for, and refuses before deriving.
+// Argon2id memory a PIM can ask for, and refuses before deriving; Limits.Budget
+// bounds the total derivation work of the open, Argon2id's passes included.
 package veracrypt
 
 import (
@@ -29,6 +30,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/go-encryptions/kdfbudget"
 )
 
 // Limits bounds the work an open may do. Zero fields take the defaults.
@@ -36,7 +39,17 @@ type Limits struct {
 	// MaxKeyDerivations is how many KDFs may run; default: all of them.
 	MaxKeyDerivations int
 	// MaxPIM bounds the PIM; default 2000 (2,015,000 PBKDF2 iterations).
+	// However high it is raised, a PIM above VeraCrypt's own maxima is
+	// refused: MAX_PIM_VALUE 2147468, and MAX_BOOT_PIM_VALUE 65535 for
+	// system encryption (src/Common/Password.h).
 	MaxPIM int
+	// Budget bounds the total key-derivation work of one open, every KDF
+	// tried and, for a hidden volume, both headers together; each derivation
+	// is charged before it runs. Nil means a fresh kdfbudget.Default() for
+	// each Open. Argon2id's passes are bounded by it alone (a PIM of 2000
+	// is 1982 passes over 1 GiB, four times the default); use
+	// kdfbudget.Unlimited() for a volume you trust.
+	Budget *kdfbudget.Budget
 	// MaxIterations bounds the PBKDF2 iterations of one derivation;
 	// default 2,015,000.
 	MaxIterations int
@@ -184,13 +197,19 @@ func OpenFrom(r ReadAtCloser, size int64, o Options) (*Device, error) {
 	default:
 		offs = []int64{0}
 	}
+	// One budget for the whole open: a hidden volume tries two headers and
+	// both drain it. A nil Limits.Budget means a fresh Default for this open.
+	budget := o.Limits.Budget
+	if budget == nil {
+		budget = kdfbudget.Default()
+	}
 	err := error(corrupt("no header position fits a device of %d bytes", size))
 	for _, off := range offs {
 		if off < 0 || off+headerSize > size {
 			continue
 		}
 		var h *Header
-		h, err = unlockHeader(r, off, &o)
+		h, err = unlockHeader(r, off, &o, budget)
 		if err == nil {
 			return newDevice(r, size, h, o.Hidden, o.System)
 		}

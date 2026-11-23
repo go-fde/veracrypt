@@ -6,6 +6,15 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+
+	"github.com/go-encryptions/kdfbudget"
+)
+
+// VeraCrypt's own PIM maxima (src/Common/Password.h): MAX_PIM_VALUE, and
+// MAX_BOOT_PIM_VALUE for system encryption.
+const (
+	maxPIMValue     = 2147468
+	maxBootPIMValue = 65535
 )
 
 const (
@@ -26,7 +35,7 @@ var (
 	ErrWrongSecret = errors.New("veracrypt: no KDF and cipher open the header with this secret")
 	ErrCorrupt     = errors.New("veracrypt: corrupt volume")
 	ErrUnsupported = errors.New("veracrypt: unsupported volume")
-	ErrLimit       = errors.New("veracrypt: limit exceeded")
+	ErrLimit       = kdfbudget.ErrLimit
 	ErrReadOnly    = errors.New("veracrypt: read-only")
 )
 
@@ -88,7 +97,7 @@ func parse(d []byte) (*Header, error) {
 // allowed cipher chain on each derived key, until the magic appears
 // (cryptsetup TCRYPT_init_hdr and TCRYPT_decrypt_hdr). The KDF is not
 // stored on disk: trial is the format.
-func unlockHeader(r io.ReaderAt, off int64, o *Options) (*Header, error) {
+func unlockHeader(r io.ReaderAt, off int64, o *Options, budget *kdfbudget.Budget) (*Header, error) {
 	raw := make([]byte, headerSize)
 	if n, err := r.ReadAt(raw, off); n < headerSize {
 		return nil, corrupt("read header at %d: %v", off, err)
@@ -99,8 +108,16 @@ func unlockHeader(r io.ReaderAt, off int64, o *Options) (*Header, error) {
 		return nil, fmt.Errorf("%w: password longer than the key pool", ErrUnsupported)
 	}
 	lim := o.Limits.withDefaults()
-	if o.PIM < 0 || o.PIM > lim.MaxPIM {
-		return nil, fmt.Errorf("%w: PIM %d, limit %d", ErrLimit, o.PIM, lim.MaxPIM)
+	pimMax := lim.MaxPIM
+	ceiling := maxPIMValue
+	if o.System {
+		ceiling = maxBootPIMValue
+	}
+	// Whatever the caller raises MaxPIM to, a PIM VeraCrypt itself cannot
+	// write is refused.
+	pimMax = min(pimMax, ceiling)
+	if o.PIM < 0 || o.PIM > pimMax {
+		return nil, fmt.Errorf("%w: PIM %d, limit %d", ErrLimit, o.PIM, pimMax)
 	}
 	d := make([]byte, encLen)
 	derivations, skipped := 0, false
@@ -109,15 +126,23 @@ func unlockHeader(r io.ReaderAt, off int64, o *Options) (*Header, error) {
 			continue
 		}
 		iter, mem := v.cost(o.PIM)
-		if mem > lim.MaxArgon2MemKiB || (v.kdf != Argon2id && iter > lim.MaxIterations) {
+		// Argon2id's passes are bounded by the budget, not MaxIterations: a
+		// PIM of 2000 runs 1982 passes over 1 GiB.
+		if mem > lim.MaxArgon2MemKiB || (v.kdf != Argon2id && iter > uint64(lim.MaxIterations)) {
 			skipped = true
 			continue
 		}
 		if derivations == lim.MaxKeyDerivations {
 			return nil, fmt.Errorf("%w: more than %d key derivations", ErrLimit, lim.MaxKeyDerivations)
 		}
+		// Charge before deriving: a refused charge spends nothing and skips
+		// this variant, the next one may still fit.
+		if err := v.charge(budget, o.PIM); err != nil {
+			skipped = true
+			continue
+		}
 		derivations++
-		key := v.derive(pool, salt, o.PIM)
+		key := deriveKey(v, pool, salt, o.PIM)
 		for _, c := range chains {
 			if o.Cipher != "" && c.name != o.Cipher {
 				continue
@@ -137,8 +162,10 @@ func unlockHeader(r io.ReaderAt, off int64, o *Options) (*Header, error) {
 			return h, nil
 		}
 	}
-	if derivations == 0 && skipped {
-		return nil, fmt.Errorf("%w: every allowed KDF costs more than the limits allow", ErrLimit)
+	if skipped {
+		// A KDF the limits or the budget refused might have opened it: that is
+		// not a wrong secret.
+		return nil, fmt.Errorf("%w: a KDF costs more than the limits or the budget allow", ErrLimit)
 	}
 	return nil, ErrWrongSecret
 }
