@@ -4,8 +4,8 @@ go 1.27.4
 
 require (
 	github.com/ebitengine/purego v0.11.3
-	github.com/go-authn/secretsource v0.9.0
-	github.com/go-fde/veracrypt v0.8.0
+	github.com/go-authn/secretsource v0.12.1
+	github.com/go-fde/veracrypt v0.8.1
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/crypto v0.59.0
 )

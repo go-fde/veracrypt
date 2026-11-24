@@ -3,8 +3,8 @@ github.com/ebitengine/purego v0.11.2 h1:WWiTx8rD8zYdOwSj8O/NiNbsOvSAgJMTlyV1XlbU
 github.com/ebitengine/purego v0.11.2/go.mod h1:DCHPP08djqhNSoTfImcnHYQRZmd0qhakvrozqaEYhGQ=
 github.com/go-authn/harden v0.2.0 h1:xPWLSeelcFEo4gJU5aTNWngZn6R/VQ9bTGDx3BRrUb0=
 github.com/go-authn/harden v0.2.0/go.mod h1:sceLxhnMHtExHEp9bU8XHKCw2fp+WFjh6Ri6Yxu2aVA=
-github.com/go-authn/secretsource v0.9.0 h1:N2y+g1LIhtC9+u42IGCNcqB2s6deZ5YUeJt1yGBWyfw=
-github.com/go-authn/secretsource v0.9.0/go.mod h1:59e2lgmXt36JIyrCjlYjLG5BYG+umxYJSAmHb5J+gfk=
+github.com/go-authn/secretsource v0.12.1 h1:kGNdcYjijaNK33gSNgcggHW1aytXFAOpc7APhnDhino=
+github.com/go-authn/secretsource v0.12.1/go.mod h1:59e2lgmXt36JIyrCjlYjLG5BYG+umxYJSAmHb5J+gfk=
 github.com/go-compressions/xz v0.3.1 h1:z4U2wNrV71pgUvxkSlBuoZc7JCJ7d+Tb3tSjyMeGhKc=
 github.com/go-compressions/xz v0.3.1/go.mod h1:ZbYM2CbKR8SZzq6rqhqlWFnBaXrNhWwQyTSslnYQ0FU=
 github.com/go-encryptions/camellia v0.1.1 h1:VGPuw3ruF76O0rdsTQXbNQkx14S9XuVAPkEmr4EdLmI=
@@ -23,8 +23,8 @@ github.com/go-encryptions/whirlpool v0.4.1 h1:cytOsHjPs03F9gWVhMtXc0EZUWNkqkaPGh
 github.com/go-encryptions/whirlpool v0.4.1/go.mod h1:DlEGCh+3pFWIT8sf9SNqvGmU9Xz0D6awaqaIGvptQDk=
 github.com/go-encryptions/xts v0.3.2 h1:0HKFiBsCaT2+4sPBZXy/oT6Wo8a96EpUEmrDzdGO8sw=
 github.com/go-encryptions/xts v0.3.2/go.mod h1:DOulimnYhyZsjPPeMPDkD/i6cUOLq7mpfvGKG+cdVKQ=
-github.com/go-fde/veracrypt v0.8.0 h1:vShd9Emov2wpRuQmfY4X166XVmT52d9yzwcK2H23mGo=
-github.com/go-fde/veracrypt v0.8.0/go.mod h1:PPrU9IJLnxMCIu/4k9bo43v8xHarH7MO41iPDxU6OGM=
+github.com/go-fde/veracrypt v0.8.1 h1:AOZaKXzDj35RffV7HJwkjC3p6Bzh2srWTuzM8MVxLWI=
+github.com/go-fde/veracrypt v0.8.1/go.mod h1:PPrU9IJLnxMCIu/4k9bo43v8xHarH7MO41iPDxU6OGM=
 github.com/go-freedesktop/secretservice v0.4.0 h1:PV2fLZ/ZsL2R5T6CMBOQ/5lmwP73rUJ1PN0FG6v5gQ0=
 github.com/go-freedesktop/secretservice v0.4.0/go.mod h1:JQ2M/y+g4Img7KM2bleUTz2EruH9fpkJ4GHqQpYVAMo=
 github.com/go-macos/keychain v0.3.1 h1:pH/sxiVCTqj2rafKiWsufWKrRlHZ7YRNiePgrMieRQs=
